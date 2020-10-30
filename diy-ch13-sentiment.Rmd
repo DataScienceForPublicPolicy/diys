@@ -1,0 +1,127 @@
+---
+title: 'DIY: Scoring text for sentiment'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 13*
+ 
+
+In this DIY, we turn to a Wikipedia entry about the 1979 Oil Crisis that had a substantial effect on the Western World's economy.^[The Wikipedia article on the Oil Crisis can be found at https://en.wikipedia.org/wiki/1979_oil_crisis]. The article on the Oil Crisis presents both positive and negative effects -- a perfect example of how sentiment analysis can summarize a body of text. The first paragraph describes the magnitude of the crisis: 
+
+> The 1970s energy crisis occurred when the Western world, particularly the United States, Canada, Western Europe, Australia, and New Zealand, faced substantial petroleum shortages, real and perceived, as well as elevated prices. The two worst crises of this period were the 1973 oil crisis and the 1979 energy crisis, when the Yom Kippur War and the Iranian Revolution triggered interruptions in Middle Eastern oil exports.
+
+Whereas the sixth paragraph softens the implications, turning to instances where the crisis had a far less adverse impact:
+
+>The period was not uniformly negative for all economies. Petroleum-rich countries in the Middle East benefited from increased prices and the slowing production in other areas of the world. Some other countries, such as Norway, Mexico, and Venezuela, benefited as well. In the United States, Texas and Alaska, as well as some other oil-producing areas, experienced major economic booms due to soaring oil prices even as most of the rest of the nation struggled with the stagnant economy. Many of these economic gains, however, came to a halt as prices stabilized and dropped in the 1980s.
+
+Our objective with this DIY is to show how sentiment evolves over the first six paragraphs as scored by the Bing Lexicon implemented in the `tidytext` package. To start, we read the raw text from the `wiki-article.txt` file. 
+
+```{r, warning=FALSE, message = FALSE, error=FALSE}
+#Load package
+  pacman::p_load(tidytext, dplyr)
+
+#Read text article
+  wiki_article <- readLines("data/wiki-article.txt")
+```
+
+To make use of the text, we tokenize the six paragraphs of text, remove stop words, then apply a left join with the Bing lexicon. The resulting table contains both matching and non-matching terms and aggregates term frequencies by paragraph `para`, `word`, and `sentiment`. In total, $n = 18$ words are labeled negative and $n=11$ words are positive.
+
+```{r, warning=FALSE, message = FALSE, error=FALSE}
+#Set up in data frame
+  wiki_df <- data.frame(para = 1:length(wiki_article),
+                        text = wiki_article, 
+                        stringsAsFactors = FALSE)
+
+#Join tokens to lexicon
+  sent_df <- wiki_df %>%
+    unnest_tokens(word, text) %>% 
+    anti_join(get_stopwords(language = "en")) %>%
+    left_join(get_sentiments("bing")) %>%
+    count(para, word, sentiment, sort = TRUE)
+  
+#Label terms without sentiment
+  sent_df$sentiment[is.na(sent_df$sentiment)] <- "none"
+```
+
+Next, we write a basic function to calculate various sentiment metrics such as polarity and expressiveness. Packages such as `sentimentr` implement scoring, but as rules-based sentiment analysis is fairly simple, we directly implement metrics in the formula to illustrate their accessibility. 
+
+```{r}
+  sentMetrics <- function(n, s){
+
+    #Set input metrics
+      N <- sum(n, na.rm = T)
+      x_p <- sum(n[s =="positive"], na.rm = T)
+      x_n <- sum(n[s =="negative"], na.rm = T)
+      
+    #Calculate scores
+      return(data.frame(count.positive = x_p,
+                        count.negative = x_n,
+                        net.sentiment = (x_p - x_n) / N,
+                        expressiveness = (x_p + x_n) / N,
+                        positivity = x_p / N,
+                        negativity = x_n / N,
+                        polarity = (x_p - x_n) / (x_p + x_n))
+      )
+  
+  }
+```
+
+The function is designed to work on one document at a time, requiring a loop to score each paragraph in the article. We iterate over each paragraph using `lapply`, returning the results in a data frame `rated`.
+
+```{r, warning=FALSE, message = FALSE, error=FALSE}
+#Apply sentiment scores to each paragraph
+  rated <- lapply(sort(unique(sent_df$para)), function(p){
+                    para_df <- sent_df %>% filter(para == p)
+                    output <- sentMetrics(n = para_df$n, 
+                                          s = para_df$sentiment)
+                    return(data.frame(para = p, 
+                                      output))
+                  })
+
+#Bind into a data frame
+  rated <- do.call(rbind, rated)
+  
+```
+
+Let's examine the results by plotting sentiment by paragraph in Figure \@ref(fig:sentoil). In the first line graph (plot (A)), we see that the first four paragraphs are net negative, then turn net positive in the last two paragraphs. Notice that both polarity and net sentiment tell the same story, but the magnitudes of their values are quite different. In fact, the Pearson's correlation is $\rho = 0.964$. When we dive deeper into the positivity and negativity, we see that the switch in tone is widespread -- earlier paragraphs have mostly negative terms while the tone softens in later paragraphs that describe less dire conditions in the world economy. 
+
+
+```{r, sentoil, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE, fig.cap = "Sentiment scores for the first six paragraphs of the Wikipedia article on 1979 Oil Crisis. Graph (A) illustrates net sentiment and polarity. Graph (B) plots positivity and negativity.", fig.height = 3 }
+pacman::p_load(ggplot2, gridExtra)
+
+plot1 <- ggplot(rated, aes(x = para, y = polarity)) +
+          geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "grey") + 
+          geom_line(colour = "blue", width = 2)  + 
+          geom_point(colour = "blue", width = 2)  + 
+          geom_line(aes(x = para, y = net.sentiment), colour = "orange", width = 2) + 
+          geom_point(aes(x = para, y = net.sentiment), colour = "orange", width = 2) + 
+          ylab("Polarity (blue), Net Sentiment (orange)") + 
+          xlab("Paragraph Number") + 
+          ggtitle("(A) Polarity and Net Sentiment by Paragraph") + 
+          theme_bw() + 
+          theme(plot.title = element_text(size = 10),
+                axis.title.x = element_text(size = 10),
+                axis.title.y = element_text(size = 10)) 
+          
+plot2 <- ggplot(rated, aes(x = para, y = positivity)) +
+          geom_hline(aes(yintercept = 0), linetype = "dashed", colour = "grey") + 
+          geom_point(colour = "green") + 
+          geom_line(colour = "green", width = 2)  + 
+          geom_point(aes(y = negativity), colour = "red") + 
+          geom_line(aes(y = negativity), colour = "red", width = 2)  + 
+          ylab("Negativity (red), Positivity (blue)") + 
+          xlab("Paragraph Number") + 
+          ggtitle("(B) Negativity and Positivity by Paragraph") + 
+          theme_bw() + 
+          theme(plot.title = element_text(size = 10),
+                axis.title.x = element_text(size = 10),
+                axis.title.y = element_text(size = 10)) 
+
+grid.arrange(plot1, plot2, ncol = 2)
+``` 
+

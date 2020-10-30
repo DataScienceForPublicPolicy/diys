@@ -1,0 +1,148 @@
+---
+title: 'DIY: Working with raster math'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 12*
+  
+
+Let's work through some examples using some simulated data. ^[The code used to simulate the rasters is available at the Github site [github.com/DataScienceForPublicPolicy/build-simulation-data](github.com/DataScienceForPublicPolicy/build-simulation-data) under `raster-simulation.Rmd`.] In the `raster_simulate.Rda` file, we have simulated four rasters of $50 \times 50$ cells: `r1`, `r2`, `r3`, and `pop_r`. We have plotted all four rasters in Figure \@ref(fig:create3samplerasters). 
+
+```{r}
+  load("data/raster_simulate.Rda")
+```
+
+
+```{R create3samplerasters, echo = F, fig.cap = "Four simulated raster files: `r1`, `r2`, `r3`, and `pop_r`.", fig.height = 2.5}
+  # Create the plots
+  p1 = ggplot(data = as.data.frame(r1, xy = T)) +
+    geom_raster(aes(x, y, fill = val)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("r1") + 
+    theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+  p2 = ggplot(data = as.data.frame(r2, xy = T)) +
+    geom_raster(aes(x, y, fill = val)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("r2") + 
+  theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+  p3 = ggplot(data = as.data.frame(r3, xy = T)) +
+    geom_raster(aes(x, y, fill = val)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() + 
+    ggtitle("r3") 
+  plegend = p3 %>% get_legend()
+  p3 = p3 + theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+  p4 = ggplot(data = as.data.frame(pop_r, xy = T)) +
+    geom_raster(aes(x, y, fill = val)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("pop_r") + 
+  theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+    
+  grid.arrange(p1, p2, p3, p4, ncol = 4)
+
+```
+
+If we imagine that `r1`, `r2`, and `r3` are the same variable over time for a fixed geographic area, we may be interested to know the mean value in each cell.  To find the mean value of each cell across the three rasters, we have a two options:
+
+1. Sum the rasters and then divide by three: $(r1 + r2 + r3) / 3$
+2. Create a stack and then take the mean: `stack(r1, r2, r3) %>% mean()`
+
+When we implement both options, we can test if these yield the same result using `all.equal` -- they do. 
+
+```{R rastermean, results= 'hide', message = FALSE, warning = FALSE, error = FALSE}
+#Method 1: Sum then divide
+  r_mean <- (r1 + r2 + r3) / 3
+
+#Method 2: Stack and mean
+  r_mean_alt <- stack(r1, r2, r3) %>% mean()
+  
+#Compare
+  all.equal(r_mean, r_mean_alt)
+```
+
+We can elaborate Method 2 to find other summary statistics for each cell such as the maximum, minimum, etc. Below, we apply `max` and `min` to the raster stack in order to find the range.
+
+```{R raster stack max}
+#Find each cell's maximum across the rasters
+  r_max <- stack(r1, r2, r3) %>% max()
+
+#Find each cell's minimum across the rasters
+  r_min <- stack(r1, r2, r3) %>% min()
+
+#range
+  r_range <- r_max - r_min
+```
+
+It may also be necessary to normalize a raster by another raster. For example, divide `r1` by `pop_r` (perhaps `r1` contains income and `pop_r` contains population -- then `r1` divided by `pop_r` would yield income per capita). We can perform division by using `R`'s arithmetic operator for division (`/`).
+
+```{R rasterdivision}
+  r_div <- r1 / pop_r
+```
+
+When we render these results in Figure \@ref(fig:manipulate3rast), it is clear that raster math is quite powerful -- we were successful in extracting patterns that would be otherwise locked away in a data frame.
+
+```{R manipulate3rast, echo = F, fig.height = 3, fig.cap = "Four outputs from raster math calculations."}
+  # Manipulate the plots
+  q1 = ggplot(data = as.data.frame(r_mean, xy = T)) +
+    geom_raster(aes(x, y, fill = layer)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("Mean") + 
+    theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+
+  q2 = ggplot(data = as.data.frame(r_max, xy = T)) +
+    geom_raster(aes(x, y, fill = layer)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("Maximum") + 
+    theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+  q3 = ggplot(data = as.data.frame(r_div, xy = T)) +
+    geom_raster(aes(x, y, fill = layer)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("Division") + 
+    theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+    
+  q4 = ggplot(data = as.data.frame(r_range, xy = T)) +
+    geom_raster(aes(x, y, fill = layer)) +
+    scale_fill_viridis_c("", option = "magma") +
+    guides(fill = guide_colourbar(barwidth = 1, barheight = 15)) +
+    coord_equal() +
+    theme_void() +
+    ggtitle("Range ") + 
+    theme(legend.position = "none", plot.title =  element_text(size=10, hjust = 0.5))
+  
+    grid.arrange(q1, q2, q3, q4, ncol = 4)
+    
+```
+
+
+

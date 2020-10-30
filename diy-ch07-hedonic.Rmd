@@ -1,0 +1,66 @@
+---
+title: 'DIY: A simple hedonic model'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 7*
+
+
+To put regression to the test, let's estimate a regression model. The basic linear regression function in `R` is `lm`, which stands for _linear model_. To run a regression with the `lm` function, we need to provide `lm` with a formula where the target variable on the left-hand side (LHS) is separated from the input variables on the right-hand side (RHS) by a *tilde* (i.e., "`~`""). If the variables are part of an `data.frame` or similar object, then we will also need to indicate for `R` the name of the object using the `data` argument in `lm`. For example,
+
+> `lm(y ~ x, data = my_data)`
+
+will regress the variable `y` from the data frame `my_data` on the variable `x` (also from `my_data`). This phrase "regress $y$ on $x$" is the standard way to refer to your *target* and *input* variables: *you regress your target variable on your input variable(s)*. Note the terminology is different depending on the context. Social scientists use outcome and explanatory variable. Computer scientists use target and input feature. General data analysts use dependent variable and independent variable. But data scientists use target and input variables.
+
+For this example, we use a sample of $n = 12687$ residential property sales from 2017 and 2018 in NYC.
+
+```{R ch7-read-sales-data, warning = F, message = F, results = 'hide'}
+#Load readr and stats packages
+  pacman::p_load(readr)
+
+#Read in .csv of property sales
+  sale_df <- readr::read_csv("data/home_sales_nyc.csv")
+```
+
+While the dataset (`home_sales_nyc.csv`) contains a number of interesting variables, we focus on the relationship between a property's sales price (the aptly named `sale.price` variable in the dataset) and the property's size (measured in square feet, i.e., the variable `gross.square.feet`). Before running any analysis, let's plot the data to check if it is in good shape.^[For the `custom_theme` used to generate Figure \@ref(fig:ch7-nyc-sales-plot), see Chapter 6.]
+
+```{r ch7-nyc-sales-plot, echo = T, fig.cap = "Residential property sales and property size, 2017-2018", fig.height = 3}
+  ggplot(data = sale_df, aes(x = gross.square.feet, y = sale.price)) +
+    geom_point(alpha = 0.15, size = 1.2, colour = "blue") +
+    scale_x_continuous("Property size (gross square feet)", labels = scales::comma) +
+    scale_y_continuous("Sale price (USD)", labels = scales::comma) +
+    custom_theme 
+```
+
+In NYC's expensive housing market, larger properties unsurprisingly cost more, but the relationship is not as strong as we would have expected. Let's run the regression. Our target variable is `sale.price` and our only input variable is `gross.square.feet` -- both of which are contained in the data frame `sale_df`. We feed all of this information to the `lm` function, which we assign to an object named `reg_est`.
+
+```{R, ch7-nyc-sales-lm}
+  reg_est <- lm(sale.price ~ gross.square.feet, data = sale_df)
+```
+
+The `lm` function returns an `lm` class object, which is assign to an object named `reg_est`. If we enter the name of the object into the console, `R` will return the estimates for the intercept $\beta_0$ and the slope coefficient for `gross.square.feet`. We, however, are interested in the rich detail about virtually aspect of the regression, which can be accessed by applying the `summary` function to the `lm` object.
+  
+```{R,  eval = FALSE}
+  summary(reg_est)
+```
+
+
+```{r, ch7-lm-summary, echo=FALSE, fig.height=2, fig.cap = "Regression output for simple hedonic model"}
+knitr::include_graphics("img/ch07-reg-sum")
+```
+
+`R` prints a summary of the residuals ($\varepsilon$) --  the error between the actual sales price and the linear model's fit. The size of the residuals are quite large indicating the model is lossy. 
+
+After the residuals, are gives the coefficient estimates and several other important statistics. Within the `Coefficients` section, R first prints the intercept (i.e., `(Intercept)`). Wait! We never asked for an intercept... or did we? Because intercepts are standard in statistics, econometrics, data science, and essentially every other empirical field, R defaults to using an intercept—it assumes you want an intercept. If you do not want an intercept, then you need to put a `-1` in your `lm` equation.^[For example, you would write `lm(sale.price ~ -1 + gross.square.feet, data = sale_df)` if you wanted to estimate the relationship between sale price and property size without an intercept.] You will often hear an intercept interpreted as the predicted value for the target variable when the input variable takes on a value of zero. However, this interpretation can often be misleading. 
+
+For instance, this interpretation would say that a property in NYC with approximately zero square feet would be worth negative 46,000 dollars. This interpretation is obviously absurd but what about the statistics makes this interpretation so absurd? The problem is that this interpretation of the intercept generally ignores the fact that we only observe data for a certain set of values for the target and input variables -- we do not observe properties smaller than 120 square feet^[Which is still amazingly small.], and we do not observe any sales below $10,000.^[When assembling these data, we restricted the sample to sales between $10,000 and $10,000,000 so as to avoid gifted properties and extreme values.] Making predictions/interpretations outside of the range of your data is called _extrapolation_. Extrapolation is not necessarily bad -- sometimes you have to make an educated guess about a data point that is unlike any data you have previously seen. However, when you extrapolate, you should be aware that you are moving outside of the range of data on which you fit your model—and the relationships between your target variable and input variable(s) may look very different in different ranges of the data.
+
+Next: The estimate slope coefficient on `gross.square.feet`. The estimated coefficient on square feet is approximately `r coef(reg_est)[2] %>% round(1)`. First, consider the _sign_ of the coefficient. The fact that this coefficient is positive indicates that properties with more gross square feet (bigger properties) tend to sell for more money. No surprises here. The actual value of the coefficient tells us that _in this dataset_ each additional gross square foot correlates with an increase in sales price of approximately `r coef(reg_est)[2] %>% round(0)` dollars.
+
+But how confident should we be in this estimate? The next three columns provide us with tools for statistical inference—telling how precise our estimate is. The column labeled `Std. Error` gives the _standard error_, the column labeled `t value` gives the (Student's) t-statistic for testing whether the coefficient is different from zero, and the column `Pr(>|t|)` gives the p-value for a two-sided hypothesis test that tests whether there is statistically significant evidence that our estimated coefficient differs from zero (i.e., testing the null hypothesis $\beta_1 = 0$). Common practices within statistics and social sciences suggests that p-values below 0.05 indicate sufficient statistical evidence to reject the null hypothesis. Here, because our p-value is much less than 0.05, we would say that we find statistically significant evidence of a non-zero relationship between a property's sales price and its gross square feet at the five-percent level.
+

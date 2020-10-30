@@ -1,0 +1,317 @@
+---
+title: 'DIY: Expanding Health Care Coverage through GLM'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 8*
+
+In this DIY, we explore how logistic regression can help describe trends in health care coverage in the United States while supporting a predictive targeting campaign to reach uninsured individuals.
+
+__Background__. Universal healthcare has become a basic human right in many countries. In the United States, this is not currently a guarantee, shrouded in heated political debate and controversy. Regardless of the politics, there is a lot of useful data on healthcare coverage. According to the American Community Survey ([ACS](https://factfinder.census.gov/faces/tableservices/jsf/pages/productview.xhtml?pid=ACS_pums_csv_2009&prodType=document)), an annual survey of approximately 3.5% of the US population as conducted by the US Census Bureau, over 22.4% of residents of the U.S. state of Georgia were without healthcare coverage in 2009. That is a fairly sizable proportion of the population -- for every ten people, two to three did not have coverage. To close the gap in 2010, a new law was signed into effect to provide affordable healthcare to the uninsured (@obamacare). 
+
+Imagine that you have been tasked with getting the word out about the new program in the state of Georgia. There is a hiccup, however. While commercial marketing databases are common, there are not many sources of information that indicate whether one has health care. The arguable best data on coverage are survey-based. Thus, we do not know *who* is and is not insured. A brute force marketing campaign *could* reach out to all Georgians though it can easily be seen as a wasted effort as three-quarters of the population are already covered. *How do we reach the remaining quarter of the population that is not already insured?* For marketers and public policy practitioners, this is a classic targeting problem.
+
+__Setting up a solution__. We operationalize our solution by estimating a logistic regression. Given the label $y(Coverage)$, we can use logistic regression to not only infer what is associated with coverage, but also train a model to prioritize who should be contacted about receiving coverage: 
+
+$$Y(\text{No Coverage}) = f(\text{Sex, Age, Education, Marital Status, Race, Citizenship})$$
+
+The `glm` function makes it easy to estimate logistic regression in addition to other linear models including ordinary least squares for continuous outcomes, logistic regression for binary outcomes and Poisson regression for count outcomes. At a minimum, three parameters are required:
+
+
+
+> `glm(formula, data, family)`
+
+> where:
+
+> - `formula` is a formula object. This can take on a number of forms such as a symbolic description (e.g. $y = \beta_0 + \beta_1 x_1+ \beta_2 x_2 + \epsilon$ is represented as `y ~ x1 + x2`). 
+> - `data` is a data frame containing the target and inputs.
+> - `family` indicates the probability distribution used in the model. Distributions typically used for GLMs are _binomial_ (binary outcomes), _poisson_ (count outcomes), _gaussian_ (continuous outcomes - same as OLS), among others.
+
+We use the U.S. Census Bureau's ACS sample for Georgia to train the logistic regression. ACS samples are thoroughly designed survey samples that have sampling weights indicating how many people each response represents. For simplicity, we have curated a sample with pertinent variables, but ignore the sampling weights. 
+
+
+
+```{r, message=FALSE, warning=FALSE}
+  load("data/acs_health.Rda")
+```
+
+
+__Focusing on interpretation__. In public policy, the focus of regression modeling is typically on identifying an effect or an associated relationship that describes the process being studied. To tease out the contributions of effects from distinct sets of factors, analyses involve a *buildup*, which are a series of models that show how sets of conceptually-related variables contribute to the phenomenon in question. In our analysis below, we show a build up of four models: personal characteristics (race, age and sex), economic factors (wage, education, employment), social factors (citizenship, marital status), and "fully loaded" (all factors). The inclusion of certain characteristics, such as race and sex, are arguably necessary for informing models the health care. Demographic variables may capture latent, unobserved characteristics that in turn can improve the predictability of the coverage variable, but *it is advisable to review if inclusion of these characteristics are equitable and ethical*.
+
+
+
+
+```{r, message = FALSE, warning = FALSE}
+  glm_pers <- glm("no.coverage ~ log(age) + race + sex", 
+                      data = health, family = binomial)
+
+  glm_econ <- glm("no.coverage ~ wage + esr + schl", 
+                  data = health, family = binomial)
+  
+  glm_soc <- glm("no.coverage ~ cit + mar ", 
+                 data = health, family = binomial)
+  
+  glm_full <- glm("no.coverage ~ log(age) + wage + schl + esr + cit + mar + race + sex", 
+                 data = health, family = binomial)
+
+```
+
+
+
+
+
+Each `glm` call returns a regression object that concisely summarizes the inner workings of a logistic regression model. These results are summarized in Table \@ref(tab:regtablogit). Let's start with identifying which variable groups contribute the most to model fit as inferred with the Akaike Information Criterion (AIC) values at the bottom of the regression table. The specification with the lowest AIC indicates that the model that best captures the process being modeled. The *fully* specified model explains the health care story the best; However, the *economic* specification carries the most explanatory power among any one variable group. It is particularly interesting that the combination of economic, social and personal factors yield a model that performs far better than any single part. 
+
+The body of the regression table shows the relationships (e.g. positive or negative coefficients) and their statistical significance (e.g. standard errors in parentheses). Other than race, all variables are statistically significant at the 1% level, contributing to the health care coverage story, albeit some more than others. For example, education has a large effect in the combined model. Of the four levels in education, all coefficients are interpreted relative to the graduate degree reference group. People who did not finish high school and a high school graduate have a _3.7-times_ ($e^{ 1.3} = 3.7$) and _3.3-times_ ($e^{ 1.2} = 3.3$) higher chance of being uninsured, respectively. In contrast, a college graduate i relatively better off than the previous two groups with a _1.7-times_ higher chance of being uninsured ($e^{w = 0.5} = 1.7$). 
+ 
+ 
+\renewcommand{\arraystretch}{1}
+
+```{r,  echo = FALSE, results = 'asis', warning=FALSE, message=FALSE}
+ pacman::p_load(stargazer)
+ output1 <- capture.output(stargazer(glm_pers, 
+                                     glm_econ, 
+                                     glm_soc, 
+                                     glm_full,
+                                     dep.var.labels = rep("No Health Care Coverage",4),
+           column.labels = c("Personal", "Economic", "Social", "Full"),
+           label = "tab:regtablogit",
+           title = "Logistic regression coefficient table for four alternative specifications.", 
+           single.row = T,
+           header = FALSE, 
+           digits = 1,
+           df = FALSE,
+          covariate.labels = c("log(Age)",
+                     "Race: Asian", "Race: Black", 
+                     "Race: Native Hawaiian/Pac. Islander",
+                     "Race: Other", 
+                     "Race: Two or More",
+                     "Race: White",
+                     "Sex: Male", 
+                     "Wage", "Employ: Civilian",
+                     "Employ: Not in Labor Force", 
+                     "Employ: Unemployed",
+                     "Education: HS Degree",
+                     "Education: Less than HS", 
+                     "Education: At least BA",
+                     "Citizen: No", "Married: Yes",
+                     "Married: Never", "Married: Separated",
+                      "Married: Widowed",  
+                     "Constant")))
+ # cat(paste(gsub("\\(\\d{1,3}\\.\\d{3}\\)", "", output1), 
+ #           collapse = "\n"), "\n")
+  cat(output1,collapse = "\n")
+```
+ 
+ 
+
+
+These effects seem to be reasonable. For additional surety, we screen for multicollinearity in the full specification by calculating the VIFs making use of the `vif` function in the `car` package. Fortunately, all values are close to $VIF = 1$ (see Figure \@ref(tab:viftab)) suggesting that there is not likely that collinearity has undue influence on our estimates. 
+
+
+
+```{r, eval = FALSE}
+#Load package
+ pacman::p_load(car)
+
+#VIF function
+ vif(glm_full)
+ 
+```
+
+
+
+```{r, viftab, echo = FALSE,  warning=FALSE, message=FALSE}
+ pacman::p_load(car)
+ vif1 <- as.data.frame(vif(glm_full))
+ vif1 <- data.frame(vars = c("log(age)", "Wage", "Education", "Employment", "Citizenship", 
+                             "Marital Status", "Race", "Sex"),
+                    vif1)
+ knitr::kable(vif1, col.names = c("Variable", "GVIF", "Degrees of Freedom", "Adjusted GVIF"),
+       caption =  "Generalized Variance Inflation Factors for Full Specification",
+       booktabs = T,
+       row.names = FALSE, digits = 2)
+```
+
+
+
+
+__Focus on prediction__. Let's now approach classifiers from the lens of conducting a micro-targeting campaign to get the word out about new insurance options. Using logistic regression, we can train a model to produce probabilities of being uninsured. The trained model could then be applied at scale to a commercial database of consumers that contains the same variables. As marketing databases are proprietary and quite expensive, we simulate the process by splitting our `health` sample into a training set of 70% of observations to build our model and the remaining 30% as a test set. 
+
+
+
+
+```{r, message=FALSE, warning=FALSE}
+#Set seed for replicability, then randomly assign
+  set.seed(321)
+  rand <- runif(nrow(health)) > 0.7
+  
+#Create train test sets
+  train <- health[rand == T, ]
+  test <- health[rand == F, ]
+```
+
+
+
+
+Different practices apply when gauging accuracy of predictive models. Data scientists often are weary of measuring accuracy in-sample as it will only overstate predictive performance. Instead, we can partition the training sample into *k*-number of randomly selected partitions. For each partition $k$, we train a model on $k-1$ partitions, then predict partition $K$ taking note of its predicted accuracy. We then cycle through each $k$ until each partition is predicted once. Then, the accuracy measures across all $k$ partitions are averaged. This *k-folds* cross validation strategy is a standard procedure for validating model performance. It sounds like an arduous programming task, but fortunately, the `cv.glm` function in the `boot` library makes validation process quite seamless:
+
+> `cv.glm(data, fit, cost, K)`
+
+> where:
+
+> - `data` is a data frame or matrix.
+> - `fit` is a glm model object.
+> - `cost` specifies the cost function for cross validation. 
+> - `K` is the number of cross validation partitions.
+
+Note that the cost function needs to be specified by the user. To supply a custom cost function, two vectors need to be specified: The observed responses and the predicted probabilities. For example, we can wrap a function around the `ROCR` package to obtain the Area Under the Curve (AUC) metric.
+
+
+
+```{r}
+costAccuracy <- function(y, yhat){
+  #
+  # Calculate AUC using ROCR package
+  # 
+  # Args:
+  #   y, yhat = binary target and predicted probabilities 
+  #
+  # Returns: AUC value
+  
+  pacman::p_load(ROCR)
+  pred.obj <- prediction(yhat, y)
+  perf <- performance(pred.obj, measure = "auc")
+  return(unlist(perf@y.values))
+}
+```
+
+
+
+
+*What's an appropriate number of partitions k?* Smaller values of *k* reduce the number of available observations, which in turn affords fewer opportunities for the model to learn underlying patterns. The result will be noisier predictions that lead to more volatile estimates of accuracy and a lessened ability to distinguish a well-behaved model from one a poor one. In cases where sub-populations in the sample are small (e.g. some demographics tend to be quite small), the entirety of the sub-sample fits into one partition and causes the model to "crash". Choosing a higher value of *k*, in contrast, will mitigate challenges with sample loss, but requires more time to train *k* models. This is lengthened when we consider that k-folds cross validation would need to be performed on *all alternative models* so that we are sure the selected model is in fact the best. We recommend at least 10-folds cross validation, but the value of *k* should be sufficiently large to lend confidence to the choice of best model.
+
+We test each specification using 10-folds cross validation and obtain the average AUCs.  The cross-validated accuracies, stored in the `delta` element of the `cv.glm` object, indicate that each group of variables have comparable contributions to accuracy. When combined, the fully loaded specification performs the best, achieving $AUC = 0.81$ -- a decent result. Furthermore, the relative model performance confirms the AIC results. 
+
+
+
+
+```{r,  message = FALSE, warning = FALSE}
+# Load boot library
+  pacman::p_load(boot)
+
+# Train models
+  glm_pers <- glm("no.coverage ~ log(age) + race + sex", data = train, family = binomial)
+  glm_econ <- glm("no.coverage ~ wage + esr + schl", data = train, family = binomial)
+  glm_soc <- glm("no.coverage ~ cit + mar ", data = train, family = binomial)
+  glm_full <- glm("no.coverage ~ log(age) + wage + schl + esr + cit + mar + race + sex", 
+                 data = train, family = binomial)
+
+# Calculate k-folds 
+  pers <- cv.glm(data = train, glmfit = glm_pers, cost = costAccuracy, K = 10)
+  econ <- cv.glm(data = train, glmfit = glm_econ, cost = costAccuracy, K = 10)
+  soc <- cv.glm(data = train, glmfit = glm_soc, cost = costAccuracy, K = 10)
+  all <- cv.glm(data = train, glmfit = glm_full, cost = costAccuracy, K = 10)
+```
+
+
+
+
+__Scoring__. We can now apply the fully loaded specification to the test set to inform micro-targeting efforts. This is accomplished using the `predict` function, which requires a `glm` model object and a data set (`newdata`) to score observations.
+
+> `predict(object, newdata, response)`
+
+> where:
+
+> - `object` is a GLM model object.
+> - `newdata` is a data frame. This can be the training data set or the test set with the same format and variables as the training set.
+> - `response` indicates the type of value to be returned, whether it is the untransformed "link" or the probability "response".
+
+```{r, warning=FALSE, message=FALSE, echo = FALSE}
+#Predict
+  yhat_train <- predict(glm_full, train, type = "response")
+  yhat_test <- predict(glm_full, test, type = "response")
+  
+#Obtain AUCs
+  auc_train <- costAccuracy(train$no.coverage, yhat_train)
+  auc_test <- costAccuracy(test$no.coverage, yhat_test)
+```
+
+
+
+As a sanity check, we compute the AUCs for each `train` and `test` samples, revealing comparable performance of `r paste(round(100*auc_train,1), "%")` versus `r paste(round(100*auc_test,1), "%")`). Generally, we should expect to see that test accuracy are lower than train accuracy. A small to negligible difference in accuracy between the training and test indicates the model only slightly overfits, whereas a large difference should merit more attention.
+
+
+
+
+```{r, eval =F}
+#Predict
+  yhat_train <- predict(glm_full, train, type = "response")
+  yhat_test <- predict(glm_full, test, type = "response")
+  
+#Obtain AUCs
+  auc_train <- costAccuracy(train$no.coverage, yhat_train)
+  auc_test <- costAccuracy(test$no.coverage, yhat_test)
+```
+
+
+
+__Measures for deployment__. Model accuracy is one thing, but whether a classifier is fit for purpose requires other measures. In the case of prioritization, we should ask *what is the expected hit rate for cases rated at pr > 50%?* and *how many uninsured people can we reach in the top ranked 1000 people?*. The answer to these questions can help with operational planning (e.g. how many people to staff) and cost-benefit analysis (e.g. can we reach enough people for the effort to be worth it?). 
+
+Let's calculate the estimated hit rate by first dividing the test sample into at intervals of 5% of the predicted probabilities `yhat_test`. Within each interval, we estimate the hit rate of uninsured Georgians along with the number of people. As one would expect, higher probabilities are associated with higher hit rates, but the number of people who have high scores are a relatively small proportion. Much like FireCast, as we move from high to low scores, we increasingly will encounter those who  insured people which in turn reduces the hit rate. 
+
+
+```{r, message=FALSE, warning=FALSE}
+#Load
+  pacman::p_load(dplyr)
+
+#Bin the test probabilities to nearest 5%
+  test$score_bucket <- round(yhat_test / 0.05) * 0.05
+
+#Calculate hit rates
+  rates <- test %>% 
+            group_by(score_bucket) %>%
+            summarise(hit.rate = 100*round(mean(no.coverage),2),
+                      cell.n = n(),
+                      cell.target = sum(no.coverage))
+```
+
+
+
+If the outreach campaign focused on scores equal to and greater than 50%, we would target a group of $n=3406$ people (6.5% of the sample) -- approximately 63% of which is uninsured. Alternatively, if the top 1000 people were targeted, the hit rate would be 74.5% -- markedly higher rates but a small number of people would be reached. In either case, we can maximize targeting resources by targeting highly probable cases recognizing that there is a diminishing return.
+
+
+```{r,  message=FALSE, warning=FALSE, fig.cap = "The expected hit rate based on test sample predictions: the percent hit rate (Panel A) and the number of people (Panel B) given the predicted probability of being uninsured.", fig.height = 3, echo = FALSE}
+#Load
+  pacman::p_load(ggplot2, gridExtra)
+
+#Theme
+  custom_theme <- theme_bw() +
+                theme(plot.title = element_text(size = 9),
+                axis.title.x = element_text(size = 9),
+                axis.title.y = element_text(size = 9))
+
+#Plot 
+  a <- ggplot(data = rates, aes(x = score_bucket, y = hit.rate)) +  
+           geom_area(colour = "#4472C4", fill = "#4472C4") + 
+    xlab("Predicted Probability") + ylab("Percent Uninsured") + 
+    ggtitle("(A) Hit rate") + 
+    custom_theme
+  
+  b <- ggplot(data = rates, aes(x = score_bucket, y = cell.n)) +  
+           geom_area(colour = "#4472C4", fill = "#4472C4") + 
+    xlab("Predicted Probability") + ylab("Number of People") + 
+    ggtitle("(B) Number of people per bin") + 
+    custom_theme
+  
+#Render
+  grid.arrange(a, b, ncol =2)
+
+```
+
+

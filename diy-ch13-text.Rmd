@@ -1,0 +1,192 @@
+---
+title: 'DIY: Tokenizing text'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 13*
+ 
+
+Our ultimate objective over this sequence of DIYs is to estimate the similarity between two or more documents. In the first DIY, we process a set of five news articles into tokens using a combination of the `tidytext` package to work with text, `dplyr` for general data manipulation, and `stringr` for manipulating string values.
+
+```{r, textpackages, message = FALSE, error = FALSE, warning = FALSE}
+  pacman::p_load(tidytext, dplyr, stringr)
+```
+
+The news articles, all of which were published in October 2019, focus on the US' federal budget deficit [@nytimesdeficit, @deficit, @marketwatchdeficit, @thehilldeficit, @cnbcdeficit] and were scraped from various news websites.^[In the wild, these news articles would have been embedded in HTML files on websites, requiring some attention to the structure of the page.] To start, we load the CSV that contains the articles into a data frame named `deficit`. 
+
+The text is then scrubbed of all numeric values and punctuation using a simple regex search. While we recognize that numbers embedded in the text carry useful information, we are more concerned with standardizing words so their frequency can approximate importance. 
+
+```{r, loadtext, message = FALSE, error = FALSE, warning = FALSE}
+#Load file
+  deficit <- read.csv("data/deficit-articles.csv", 
+                      stringsAsFactors = FALSE)
+  
+#Remove punctuation and numeric values
+  deficit$text <- str_remove_all(deficit$text, "[[:digit:][:punct:]]")
+  
+```
+
+Now, the magic of data processing begins. In one neat block of code, we unravel the text into neat word counts for each article, piping multiple commands together (`%>%`). 
+*Tokenization*. The code first tokenizes the `text` column into unigrams (single word tokens) using the `unnest_tokens` function (`tidytext`). A new column `word` is added to the data frame, expanding the number of rows from $n=5$ to $n=2989$.  Note that each token is automatically converted to lower case.
+
+*Stop words*. With the tokens exposed, stop words are removed. We retrieve a data frame of standard English stop words using the `get_stopwords`, then apply an `anti_join` (`dplyr` package) that retains rows that did not match terms in the stop word list. This step significantly reduces the size of the data set to $n=1792$.
+
+*Stemming*. Using the `wordStem` function (`SnowballC` package), all words are screened and adjusted for stemming if appropriate. The result is assigned to a new variable `word.stem` using the `mutate` function (`dplyr`). As a sanity check, only stemmed tokens with more than one character are retained. 
+
+*Tabulation*. Lastly, the remaining unigrams are summarized as *term frequencies* (TF) -- a count of how often each `word.stem` token appears in each article. The resulting data set contains $n = 1005$ records, meaning that some terms appear more than once and contain relatively more of an article's meaning than other terms.
+
+```{r, message = FALSE, error = FALSE, warning = FALSE}
+#Unigram in one go
+  unigram <- deficit  %>% 
+                 unnest_tokens(word, text) %>%
+                 anti_join(get_stopwords(language = "en")) %>%
+                 mutate(word.stem = SnowballC::wordStem(word)) %>% 
+                 filter(nchar(word.stem) > 1) %>%
+                 count(outlet, word.stem, sort = TRUE) 
+```
+
+
+*Document-Term Matrix*. The tabulations can be further processed into a DTM using the `cast_dtm` function (`tidytext`) -- useful for applications like topic modeling. We should also highlight that some NLP use cases call for a Document-Feature Matrix (DFM) that allow metadata about each document among other variables to be included in the matrix. DFMs are quite similar to DTM in structure, but are stored as separate object classes to facilitate other applications.
+
+```{r}
+#Cast into DTM
+  deficit_dtm <- unigram  %>% 
+                 cast_dtm(document = outlet, 
+                          term = word.stem, 
+                          value = n)
+  
+#Cast into DFM
+  deficit_dfm <- unigram  %>% 
+                 cast_dfm(document = outlet, 
+                          term = word.stem, 
+                          value = n)   
+
+```
+
+### DIY: Distinguishing between documents
+
+While term frequencies carry significant inferential power, they are also a specific representations of word importance -- higher frequency terms carry more importance.   In our example, all five articles focus on the 2019 federal budget deficit and the words "trillion", "dollar", "budget", and "deficit" all have high TF values. These high frequency terms prove particularly useful to distinguish between articles about deficits and all other topics such as education and defense. But in the case of a narrowly defined corpus exclusively focused on deficits, these terms can be viewed as stop words. Furthermore, some words may be more important (or prevalent) in one article than another, serving as a marker of a subtopic.
+
+To draw distinctions between documents, we adjust a term's frequency in a document by how prevalent it is in all other documents. For example, since "deficit" appears in all deficit articles, then it might not be as important as it is not specific to any single articles.  An *Inverse Document Frequency* (IDF) is a factor that modulates the role of Term Frequencies: 
+
+$$IDF = ln(\frac{N}{n_{term}})$$
+
+where $N$ is the number of documents and $n_{term}$ is the number of documents that contain a given term. When a term appears in all documents, the value of $IDF = 0$ -- thereby eliminating a term. But we can also see that if the ratio $\frac{N}{n_{term}}$ is too large, the IDF value could overpower the term frequency, thus taking the natural log $ln$ keeps the influence of IDF in check. 
+
+When we combine TF and IDF, the result is *TF-IDF* -- one of the most commonly applied word weighting measures in NLP: 
+
+$$\text{TF-IDF} = TF \times IDF$$
+When the value of $\text{TF-IDF}=0$, then a term is effectively treated as a stop word. This weighting scheme has been proven to be particularly useful in *document search* applications, providing a normalized perspective of which variables matter more. 
+
+To use TF-IDF in `R`, we apply the `bind_tf_idf` function to our word counts, which calculates and joins the TF, IDF, and combined TF-IDF metrics for each token.
+
+```{r, message = FALSE, error = FALSE, warning = FALSE}
+  unigram <- unigram  %>%
+              bind_tf_idf(term = word.stem, 
+                          document = outlet, 
+                          n = n)
+```
+
+The effect of TF-IDF on word importance can be quite dramatic and visualized in a parallel coordinate plot as seen in Figure \@ref(fig:tfidfcomparison). The plot illustrates how a single token's relative value changes between simple term frequencies on one vertical axis ($n$) and TF-IDF. About three-quarters of unigrams increase in their importance once controlling for how common terms are across the corpus of articles (see blue coordinate pairs). In contrast, one-quarter of the terms reduced in rank, indicating that they hold less distinguishing information. These terms include obvious deficit-related terms such as *deficit*, *spend*, *year*, *trump*, *budget*, *tax*, among others. 
+
+TF-IDF can also be used to remove hard-to-identify keywords. In the deficit articles, approximately 10% of terms ($n=100$) have TF-IDF values equal to zero.  It is not to say these terms are unimportant, but removing these terms in this context could be beneficial.
+
+```{r, tfidfcomparison, echo = FALSE, fig.cap = "Comparison of word frequency and TF-IDF distributions.", fig.height = 3}
+pacman::p_load(GGally)
+#
+up_down <- rep("same", nrow(unigram))
+up_down[ percent_rank(unigram$n) < percent_rank(unigram$tf_idf)] <- "up"
+up_down[ percent_rank(unigram$n) < percent_rank(unigram$tf_idf)] <- "up"
+
+up_down[ percent_rank(unigram$n) > percent_rank(unigram$tf_idf)] <- "down"
+unigram$Direction <- up_down
+unigram$n_tile <- percent_rank(unigram$n)
+unigram$tfidf_tile <- percent_rank(unigram$tf_idf)
+
+#Re-order
+unigram <- rbind(unigram[up_down == "down",],
+                 unigram[up_down == "same",],
+                unigram[up_down == "up",])
+
+#Plot
+  ggparcoord(unigram,
+           columns = c(3,6), groupColumn = 7, 
+           showPoints = TRUE, 
+           scale = "uniminmax",
+           alphaLines = 0.5) +
+    ylab("Scaled value") + 
+    scale_color_manual(values=c( "pink", "slategrey" ,"darkblue") ) +
+    theme_bw()+
+    theme(plot.title = element_text(size = 10),
+                  axis.title.x = element_text(size = 10),
+                  axis.title.y = element_text(size = 10)) 
+    
+```
+
+### DIY: Finding similar documents
+
+Organizations often need to quickly find *similar documents* from a large catalog of documents. The process can at times be tedious and arduous, requiring much manual work. Lawyers, for example, often search for pertinent legal records to make their arguments more compelling. Meanwhile, academic researchers often conduct extensive literature reviews so they can articulate how their work contributes to their field of study. In both cases, they start with a set of documents and look for other documents that are also similar, often times using simplistic keyword searches to sort documents.
+
+What if a corpus of documents were transformed into a DTM? A simple keyword search is transformed into a multi-keyword search.   Then, all that is required is a strategy to relate a pair of equal-length term vectors, $X$ and $Y$, derived from a pair of documents. A Pearson's Correlation Coefficient is a logical first choice to facilitate the comparison:
+
+$$\rho_{X,Y} = \frac{cov(X,Y)}{\sigma_X \sigma_Y}= \frac{\sum_{i=1}^n (X_i-\mu_X)(Y_i-\mu_Y)}{\sum_{i=1}^n (X_i-\mu_X)^2\sum_{i=1}^n (Y_i-\mu_Y)^2}$$
+
+Although a simple correlation *would* be convenient, the way in which texts are related is differently motivated than other empirical tasks. For two texts to be similar, they should have words in common. But most DTMs tend to be sparse. While a document may have $n$ words, it is smaller than the corpus' vocabulary $V$. This implies that most term frequencies in a DTM are equal to zero, which in turn means that it is fairly rare that a term will appear in a pair of documents. Conversely, it is more common that terms in a pair of documents will both be zero -- these are terms are not relevant to the calculation of similarity. 
+
+*Why does this matter?* In a simple correlation, values of zero are treated as relevant information as every value is mean-centered ($\mu$). In practice, *a Pearson's correlation may artificially inflate the relationship between two vectors by treating zero values as relevant information*. To hone-in on the relevant overlapping terms, we can instead rely on *cosine similarity*, which associates two vectors without mean-centering its values:
+
+$$cos(\theta) = \frac{\text{X} \cdot \text{Y}}{\|\text{X}\|\|\text{Y}\|}= \frac{\sum_{i=1}^n X_i Y_i}{\sqrt{\sum_{i=1}^n X_i^2}\sqrt{\sum_{i=1}^n Y_i^2}}$$
+
+Cosine similarity originates from an idea in vector calculus that uses the direction of two vectors to measure their similarity. If vector $X$ is parallel to vector $Y$, then they are similar. Otherwise, if $X$ is orthogonal to $Y$, then they are dissimilar.  Thus, the measure is the cosine of the angle between two vectors, but not the strength of the relationship. When applied to text data, the $cos(\theta)$ ranges between 0 (not similarity) and 1 (perfectly similar). 
+
+In the code snippet, we construct DTMs using each TF-IDF and term frequencies, then calculate cosine similarity matrices using the `cosine` function (`coop` package). As is apparent in Figure \@ref(tab:cosinesim), our choice of input metric accentuates different qualities of the articles.  The raw term frequencies help identify articles that are related in their overarching topics, fixating on common words that describe the federal deficit. However, TF-IDF treats these common words as stop words, leaving only terms that are reflective of the author's style and attitudes rather than the big picture. Both are valid approaches, however. The deciding factor should be what aspect of the text the similarity should reflect.
+
+Cosine similarity is the relational metric used for a multitude of recommendation systems. By calculating the cosine similarity between all documents in a corpus, it is easy to recommend other articles with similar content. For example, the scores in Figure \@ref(tab:cosinesim) can be interpreted as a list of *similar articles conditional on the MarketWatch article*. 
+
+
+```{r, eval = FALSE}
+#Load COOP
+  pacman::p_load(coop)
+  
+#Similarity based on term frequencies
+  grams_n <- unigram  %>% 
+                 cast_dtm(word.stem, outlet, n)
+  cosine(grams_n)
+  
+#Similarity based on TF-IDF
+  grams_tfidf <- unigram  %>% 
+                 cast_dtm(word.stem, outlet, tf_idf)
+  cosine(grams_tfidf)
+```
+
+```{r, message = FALSE, warning = FALSE, error = FALSE, echo = FALSE}
+#Load COOP
+  pacman::p_load(coop)
+  
+#Similarity based on term frequencies
+  grams_n <- unigram  %>% 
+                 cast_dtm(word.stem, outlet, n)
+  g1 <- cosine(grams_n)
+  
+#Similarity based on TFIDF
+  grams_tfidf <- unigram  %>% 
+                 cast_dtm(word.stem, outlet, tf_idf)
+  g2 <- cosine(grams_tfidf)
+  
+#Master
+  output <- data.frame(g1[,4], g2[,4])
+  output <- output[-4,]
+  output <- data.frame(Outlet = c("NYTimes", "The Hill", "AP", "CNBC"),
+                       output)
+  colnames(output) <- c("Outlet", "n", "TF-IDF")
+  
+#Output table
+  pander::pander(output, split.cell = 80, split.table = Inf, 
+           caption = "(\\#tab:cosinesim) Comparison of cosine similarity using TF-IDF and Term Frequencies. All values are compared against the deficit article written by MarketWatch.", 
+           justify = "left", row.names = FALSE)
+```

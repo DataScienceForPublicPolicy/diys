@@ -1,0 +1,91 @@
+---
+title: 'DIY: Loading solar energy data from the web'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 3*
+
+### Overview 
+
+For this DIY, we will import and examine data about solar energy -- a natural resource that is playing an increasingly more important role in fulfilling energy demand. In the period between 2008 and 2017, annual net generation of solar energy produced by utility scale facilities had grown by 61.3-times, from 864 thousand megawatt hours to 52,958 thousand megawatt hours [@eiasolar]. At the same time, solar also became more economical: photovoltaic module costs fell from \$3.37/peak watt to \$0.48/peak watt -- a 86% reduction in cost.
+
+The increased affordability of solar among other advanced technologies opens the possibility for constructing buildings that are hyper energy efficient. For example, the Net Zero Energy Residential Test Facility is a house that produces as much energy as it uses over the course of a year. Engineered and constructed by the National Institute of Standards and Technology (NIST) in Gaithersburg, MD, the lab home was designed to be approximately 60 percent more energy efficient than typical homes. In order to achieve net zero energy, the lab home needs to produce an energy surplus and overcome the energy consumption of a simulated family of four. In fact, within its first year, the facility produced an energy surplus that is enough to power an electric car for 1400 miles [@nist-nzert].
+
+The test bed also generates an extraordinary amount of data that help engineers study how to make more energy efficient homes and may one day inform building standards and policies. We tap into one slice of the net zero house's photovoltaic time series data, which is made available publicly at  [https://s3.amazonaws.com/nist-netzero/2015-data-files/PV-hour.csv](https://s3.amazonaws.com/nist-netzero/2015-data-files/PV-hour.csv). This data set contains hourly estimates of solar energy production and exposure on the Net Zero home's solar panels.
+
+## Loading data
+
+Suppose we would like to know how much energy are produced from the solar arrays and how variable is that energy production over the course of a year. If information on solar energy production is known for the Net Zero home among other locations around the country, decision makers and home owners can decide if investing in solar would be cost effective.^[There are a many factors that should inform these decisions. Here, we aim to illustrate the basics of loading and extracting insight from scientific data.] With only a few lines of code, we can import and summarize the information.  To start, we load the `pacman` package and use `p_load` to load the `readr` package.
+
+\vspace{12pt} 
+```{r}
+#Load libraries
+  pacman::p_load(readr)
+```
+\vspace{12pt} 
+
+With the basic functions loaded, `read_csv` is used to import a comma separated values (CSV) file stored at the given `url`, which is then loaded into memory as a data frame labeled `solar`. Notice that the path to the data file is not on your computer. `R` is able to directly download and read files from the internet. 
+
+\vspace{12pt} 
+```{r, echo = FALSE, warning = FALSE, message = FALSE, error=FALSE}
+#Create string object with URL
+  url <- "https://s3.amazonaws.com/nist-netzero/2015-data-files/PV-hour.csv"
+
+#Read data direct from web
+  solar <- read_csv(url)
+```
+\vspace{12pt} 
+
+## Examine dimensions
+
+Once the data is loaded, we check the dimensions of the data frame using `dim`: it has n = *8,737* with *32* columns. As we are primarily interested in the total amount of sunlight shining on the solar arrays at any given hour (kWh), we focus in on the variable `PV_PVInsolationHArray` in data frame `solar` and review the first five observations.
+
+\vspace{12pt} 
+```{r}
+#Check dimensions
+  dim(solar)
+
+#Extract solar array variable
+  solar_array <- solar$PV_PVInsolationHArray
+  
+#Retrieve 5 observations from top of data set
+  head(solar_array, 5)
+```
+\vspace{12pt} 
+
+##Extract summary statistics
+
+To answer our questions, we can obtain a concise `summary` to gauge the hourly variability. As it turns out, the summary indicates that the photovoltaic arrays are exposed to fairly small amounts of energy for the majority of hours as indicated by the small median relative to the mean, but there are occasional periods with intense energy exposure.
+
+\vspace{12pt} 
+```{r}
+  summary(solar_array)
+```
+\vspace{12pt} 
+
+This can be more concisely summarized as the coefficient of variation ($CV = \frac{\text{standard deviation}}{\text{mean}}$) -- the ratio of the standard deviation and the mean. Values of the CV that exceed $CV = 1$ indicate greater dispersion. Otherwise stated, the data may be *wider than it is tall*, therefore greater vales of CV indicate there may be more noise and less consistency in the data. We compute the `mean` and standard deviation `sd`. The resulting CV indicates that one standard deviation is 1.5-times as wide as the mean, suggesting that the hourly solar energy generation can be quite variable.
+
+\vspace{12pt} 
+```{r}
+#Calculate mean
+  a <- mean(solar_array)
+
+#Calculate standard deviation
+  b <- sd(solar_array)
+  
+#Calculate coefficient of variation
+  b / a
+```
+\vspace{12pt} 
+
+With only a few lines of code, we have shown how programming can make data analysis an efficient process. In the context of policy, programming removes the tedium of manually working with spreadsheets, allowing an analysis to be delivered using only a few decisive keystrokes.
+
+
+##References
+
+

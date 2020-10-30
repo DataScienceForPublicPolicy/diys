@@ -1,0 +1,71 @@
+---
+title: 'DIY: Working with PII '
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 4*
+  
+###Overview
+
+In an increasingly digital world, data privacy is a sensitive issue that has taken center stage. At the center of it is the safeguarding of Personally identifiable information (PII). Legislation in the European Union, namely the General Data Protection Regulation or GDPR, requires companies to protect the personal data of European Union (EU) citizens associated with transactions conducted in the EU [@gdpr]. The US Census Bureau, which administers the decennial census, must apply disclosure avoidance practices in order so that individuals cannot be identified [@censusavoidance]. Thus, anonymization has become a common task when processing and using sensitive PII data. 
+
+###Redaction
+
+For example, the first element in the vector below contains hypothetical PII and sensitive information -- John's social security number and balance in his savings account are shown. When presented with many lines of sensitive information, one could review each sentence and manually redact sensitive information, but given thousands if not millions of pieces of sensitive information, this is simply not feasible.
+
+ 
+```{r}
+statement <- c("John Doe (SSN: 012-34-5678) has $2303 in savings in his account.",
+               "Georgette Smith  (SSN: 000-99-0000) owes $323 to the IRS.",
+               "Alexander Doesmith (SSN: 098-76-5432) was fined $14321 for overdue books.")
+```
+  
+
+Using a combination of regex and `stringr` we can redact sensitive information with placeholders. To remove the SSN, we need a regex pattern that captures a pattern with three digits (`\\d{3}`), a hyphen, two digits (`\\d{2}`), a hyphen, then four digits (`\\d{4}`), or when combined: `\\d{3}-\\d{2}-\\d{4}`. The matched pattern is then replaced with `XXXXX`.
+
+ 
+```{r}
+  pacman::p_load(stringr)
+  new_statement <- str_replace(statement,"\\d{3}-\\d{2}-\\d{4}", "XXXXX")
+  print(new_statement)
+```
+  
+
+Next, we replace the dollar value by matching a string that starts with the dollar sign (`\\$`) followed by at least one digit (`\\d{1,}`). And finally, the John Doe's first and last name are replaced by looking for two substrings that each have at least one uppercase letter with an unspecified length (`[A-z]{1,} [A-z]{1,}`) and are found at the beginning of the string (`^`). The resulting sentence has little to no information about the individual in question.
+
+ 
+```{r}
+#Find a replace dollar amount
+  new_statement <- str_replace(new_statement,"\\$(\\d{1,})", "XXXXX")
+
+#Find and replace first and last name
+  new_statement <- str_replace(new_statement,"^[A-z]{1,} [A-z]{1,}", "XXXXX")
+  
+  print(new_statement)
+```
+  
+
+
+###Extraction
+
+Alternatively, we can extract identifying information and create a structured data set. Using the same regex statements, we can apply `str_extract` to create a three variable data frame containing person name, SSN and money -- all done with minimal effort.
+
+ 
+```{r}
+  ref_table <- data.frame(name = str_extract(statement,"^[A-z]{1,} [A-z]{1,}"),
+                          ssn = str_extract(statement,"\\d{3}-\\d{2}-\\d{4}"), 
+                          money = str_extract(statement,"\\$(\\d{1,})"))
+  print(ref_table)
+```
+ 
+
+In either case, it is advisable to conduct randomized spot checks to determine if the regex accurately identifies the desired patterns.
+
+###References
+
+

@@ -1,0 +1,233 @@
+---
+title: 'DIY: Analyzing spatial relationships'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 12*
+
+One of the most useful features of spatial data is proximity. The distance between two locations might hold a clue about a spatial concept. In our housing examples from earlier chapters, proximity to sources of pollution and central business districts might be contributors to *or* detractors from the sales price.  Likewise, the distance to police stations might hold some clue about crime patterns -- perhaps crimes tend to occur farther away from stations? Furthermore, two locations that are closer together might be more related and distance is the medium that can help quantify these relationships. To answer any questions concerning distance between locations, we need to compute a distance matrix. 
+
+Similar to the matrices used for Hierarchical Agglomerative Clustering in Chapter 11, a distance matrix quantifies the relationship between all points in a data set. Suppose we would like to compute the distance between three Chicago police stations: $1, 2, 3$. The first $3 \times 3$ matrix below shows all of the combinations between the three stations and the second matrix fills in some distances in meters.
+
+$$\text{Distance matrix} = \left[\begin{array} {rrr}
+D_{1,1} & D_{1,2} & D_{1,3} \\
+D_{2,1} & D_{2,2} & D_{2,3} \\
+D_{3,1} & D_{3,2} & D_{3,3}
+\end{array}\right] =  \left[\begin{array} {rrr}
+0 & 3090 & 8896 \\
+3090 & 0 & 11882 \\
+8896 & 11882 & 0
+\end{array}\right] $$
+
+where $D_{i,j}$ gives the distance between station $i$ and station $j$.
+
+The top-left entry (entry $D_{1,1}$ above or entry `[1,1]` in matrix notation) is the distance between the first station and itself. Of course, the distance between an object and itself is zero. Therefore, the diagonal of the matrix is all zeroes. The second entry in the first row (entry $D_{1,2}$ above or entry `[1,2]` in matrix notation) tells us the distance between the first station and the second station. This number is the same as the first entry in the second row $\left( D_{2,1} \right)$, because they both give the distance between the first and second police station. In other words, the matrix is symmetric: $D_{i,j} = D_{j,i}$.
+
+Computing a distance matrix between all objects in a shapefile requires only one function: `st_distance()` (`sf` package). The function calculates the distance in the units of the specified CRS (meters in this case). Because there are 25 police districts in the `district_sf` vector layer, the distance array will have 25 rows and 25 columns, representing the distance (in meters) between each of the 25 districts.
+
+
+```{r, distance3stations, results = "hide"}
+   district_dist <- st_distance(district_sf)
+```
+
+
+This distance matrix can help answer challenging questions that would otherwise be overlooked. In this section, we lay out steps to computing distances and use them to analyze complex spatial problems in the criminal justice system. 
+
+*__Distance between objects in different sets of data__*. Another way to pose distance-related questions is in terms of distances between objects in two distinct sets of vectors. For example, we may be interested to know how far each crime in `crime_sf` is from the nearest station in `station_sf`.
+
+The function `st_distance` can help with this application as well, requiring two arguments (`x` and `y`). The output is a distance matrix where the objects in `x` are the rows and the objects in `y` are the columns, _i.e._,
+
+$$\text{Distance matrix} = \left[\begin{array}
+{ccccc}
+D_{x_1,y_1} & D_{x_1,y_2} & \cdots & D_{x_1,y_n} \\
+D_{x_2,y_1} & D_{x_2,y_2} & \cdots & D_{x_2,y_n} \\
+\vdots & \vdots & \ddots & \vdots \\
+D_{x_n,y_1} & D_{x_n,y_2} & \cdots & D_{x_n,y_n} \\
+\end{array}\right]$$
+
+where $D_{x_i,y_j}$ gives the distance between the $i$th element of $x$ (_e.g._, the $i$th crime) and the $j$th element of $y$ (_e.g._, the $j$th police station). The matrix dimensions match our understanding of the function: we have `r crime_sf %>% nrow() %>% scales::comma()` crimes (as rows) and `r station_sf %>% nrow() %>% scales::comma()` police stations (as columns). 
+
+
+```{R distance crime station, results = 'hide'}
+#Distances between crimes and police stations
+  dist_mat <- st_distance(x = crime_sf,
+                         y = station_sf)
+```
+
+
+If we want to know the distance to the nearest police station for each crime, then we can employ the same strategy as before -- using `apply` to find the minimum distance along the rows of `dist_mat`. We do not need to worry about `0` distances now, because we calculated distances between two different sets of objects. Let's find the distance to the nearest police station for each crime and then add it to the `crime_sf` data set as a new variable.
+
+```{R dist to nearest station for each crime}
+#Minimum distance to station for each crime
+  crime_min_dist <- apply(X = dist_mat,
+                        MARGIN = 1,
+                        FUN = min)
+
+#Add distance as variable in crime_sf
+  crime_sf <- crime_sf %>% mutate(dist_station = crime_min_dist)
+```
+
+Let's plot the kernel density of these distances. ^[Given the size of the code snippets, this section's geo-processing and visualization code is made available at the Github project under *spatial-visualizations*.] Based upon these data, `r crime_sf$dist_station %>% is_less_than(1e3) %>% mean() %>% scales::percent(accuracy = 0.1)` of crimes in Chicago happen within 1 kilometer of a police station.
+
+One might wonder how this distribution of crimes' distances to the nearest station compares to the overall distribution of distances to the nearest station for all of Chicago. If police station locations are chosen to be in *high-crime* areas (or if they attract crime), then we would expect the distances between crimes and stations to be concentrated on smaller distances relative to the distances to stations for all of Chicago. If crimes avoid police stations, then we would expect their distribution to be pushed farther out relative to greater Chicago. 
+
+
+```{R crime-distances-histogram, fig.height = 2.5, echo = FALSE, fig.cap = "Kernel density plot of distance between crime incidents and nearest police station (meters)."}
+
+#Custom theme
+custom_theme <- theme_bw() +
+                theme(plot.title = element_text(size = 9),
+                axis.title.x = element_text(size = 9),
+                axis.title.y = element_text(size = 9))
+
+ggplot(data = crime_sf,  aes(x = dist_station)) +
+  geom_density(color = "white", fill = "orange", alpha = 0.6) +
+  scale_x_continuous( "Distance to nearest station (meters)", labels = scales::comma) +
+  scale_y_continuous("Density", labels = scales::percent) +
+  custom_theme
+```
+
+
+
+__*Constructing a benchmark*__. If we believe police station location has some relationship with location of crime, we need to construct a benchmark -- some comparison group that gives context. One strategy involves constructing a point vector containing a random or regular set of points placed throughout Chicago. This benchmark makes the assumption that if distance did not matter, then there is an equal chance of crime at every location in Chicago. When we compare the equal chance distribution to the actual crime-distance distribution, we can infer if distance to police station has any relationship with crime.
+
+To construct this equal chance distribution, we first create a single polygon for Chicago by merging the police district polygons (`district_sf`) through the `st_union` function. In effect, the borders between all polygons are removed and merged into a single large city limits boundary. From this new city polygon, we draw an hexagonal grid of points ($n=10000$ to be exact) using `st_sample`. Then, the same distance calculations are applied to find the minimum distance between each of the $n=10000$ points to police stations.
+
+```{R chicago hexagonal points, cache = T}
+#Re-project district shapefile to UTM 16N
+  district_sf <- st_transform(district_sf, crs = 32616)
+  
+#Take union 
+  outline_chicago <- district_sf %>% st_geometry() %>% st_union()
+  
+#Draw sample of 'hexagonal' points from Chicago
+  points_chicago <- st_sample(x = outline_chicago, size = 10000, type = "hexagonal")
+
+#Distances between points and police stations
+  dist_points_station <- st_distance(x = points_chicago,  y = station_sf)
+
+#Find distance to nearest station for each point
+  points_min_dist <-  apply(X = dist_points_station, MARGIN = 1, FUN = min)
+
+#Convert points_chicago to sf data frame
+  points_chicago <- points_chicago %>%
+                      st_coordinates() %>% as.data.frame() %>%
+                      mutate(dist_station = points_min_dist) %>%
+                      st_as_sf(coords = 1:2) %>% 
+                      st_set_crs(32616)
+```
+
+In Figure \@ref(fig:plotdistanceneareststation), we compare the police districts, the grid points and the minimum distance to police station. To an extent, the minimum distance to police station loosely follows the boundaries of the police districts -- there are both areas that are well-covered and others that are far less so. We can see that most of Chicago is within 5 km of a police station -- with the exception of the airport in the northwestern corner.
+
+```{R plotdistanceneareststation, echo = F, fig.height = 2.5, fig.cap = "An assortment of views of Chicago police stations: (A) Outline of Chicago police districts, (B) Hexagonal grid of equally-spaced records, (C) Raster plot of distance to nearest station."}
+
+#Construct small multiple plots
+#Load cowplot
+  pacman::p_load(cowplot)
+
+# Sample 1,000 points
+  points_chicago_sub <-  st_sample(
+    # Get Chicago's outline using st_union()
+    x = outline_chicago,
+    size = 1000,
+    type = "hexagonal")
+
+  
+# Plot police districts
+  gg_district <- ggplot() +
+                    geom_sf(data = district_sf) +
+                    ggtitle("(A) Police districts") +
+                    theme_void() + theme(plot.title = element_text(size = 10, hjust = 0.5))
+
+# Plot: 1000 points
+  gg_points_full <- ggplot() +
+                    geom_sf(data = outline_chicago, color = "blue", fill = NA) +
+                    geom_sf(data = points_chicago_sub, color = "black", fill = NA,
+                            shape = 19, size = 0.01) +
+                    ggtitle("(B) Grid of points") +
+                    theme_void() + theme(plot.title = element_text(size = 10, hjust = 0.5))
+
+# Plot distance to the nearest station
+  gg_dist <-  ggplot() +
+                    geom_sf(data = points_chicago, aes(color = dist_station / 1e3), size = 0.5) +
+                    ggtitle("(C) Distance to nearest station") +
+                      scale_color_viridis_c(
+                        "Dist. (km)",
+                        option = "magma",
+                        breaks = seq(0, 7.5, length = 4),
+                        labels = c("0", "2.5", "5", "7.5+") ) +
+                        theme_void() + theme(plot.title = element_text(size = 10, hjust = 0.5))
+                      
+#Plot together
+  plot_grid(
+    gg_district,
+    gg_points_full,
+    gg_dist + theme(legend.position = "none"),
+    get_legend(
+        gg_dist +
+        guides(color = guide_colourbar(barheight = 10, barwidth = 0.8)) +
+        theme(legend.position = "left",
+              legend.title = element_text(size = 9))),
+    nrow = 1,
+    rel_widths = c(1, 1, 1, 0.4))
+```
+
+__*Comparing distance distributions*__. To answer the original question, we plot kernel densities of the distance distributions as seen in Figure \@ref(fig:comparedistancedistributions). The vast majority of crimes (red line) in this data set occur within 2.5km of a police station, while our sampling of points from all of Chicago has a lower density in this distance range. This means that crimes tend to occur closer to police stations. *Is this causal?* It is hard to draw a firm conclusion. 
+
+
+```{R comparedistancedistributions, echo = F, cache = T, fig.height = 2.5, fig.cap = "Comparison of distance distributions between equal chance and crime incidents."}
+require(ggplot2)
+#custom theme
+custom_theme <- theme_bw() +
+              theme(plot.title = element_text(size = 9),
+              axis.title.x = element_text(size = 9),
+              axis.title.y = element_text(size = 9))
+
+#Graph
+ggplot() +
+    geom_density(
+      data = points_chicago %>% filter(dist_station < 8.5e3),
+      aes(x = dist_station, fill = "A", color = "A"),
+      alpha = 0.5) +
+    geom_density(
+      data = crime_sf %>% filter(dist_station < 8.5e3),
+      aes(x = dist_station, fill = "B", color = "B"),
+      alpha = 0.5) +
+    geom_hline(yintercept = 0) +
+    scale_x_continuous(
+      "Distance to nearest station (meters)",
+      labels = scales::comma) +
+    ylab("Density") +
+    scale_color_manual(
+      "",
+      labels = c("Equal chance", "Crimes"),
+      values = c(NA, "#cf556a")) +
+    scale_fill_manual( "",
+      labels = c("Equal chance", "Crimes"),
+      values = c("#301867", NA)) +
+    custom_theme
+```
+
+There are many factors that could contribute to this trend. Perhaps police stations are placed in high-crime neighborhoods or perhaps police place more effort on areas near the station, *etc.*  Drawing a causal inference is quite challenging without an experiment design. 
+
+Nonetheless, it may be informative to focus on a few crime types and other attributes of the data. Perhaps the likelihood of generating an arrest differs based on distance from a police station offers a clue.  In Figure \@ref(fig:distancearrestnarcotics), we compare the distance distribution between narcotics incidents that led to an arrest versus those that do not. Interestingly, we see some evidence that the chance of an arrest *could* depend upon the distance between the incident and the police station. That said, there are many other relationships which we would want explore more deeply before making any decisions.
+
+```{R distancearrestnarcotics, echo = F, fig.height = 2.5, fig.cap = "Distance distributions of narcotics incidents by whether an arrest was made."}
+ggplot(data = crime_sf %>% 
+         filter(primary_type == "NARCOTICS") %>% filter(dist_station < 6e3),
+          aes(x = dist_station, fill = arrest, color = arrest)) +
+        geom_density(alpha = 0.5, color = NA) +
+        geom_hline(yintercept = 0) +
+        scale_x_continuous("Distance to station (meters)", labels = scales::comma) +
+        ylab("Density") +
+        scale_fill_manual("Arrest made?", labels = c("False", "True"), 
+                          values = c("grey80", "violetred3")) +
+    custom_theme +
+        theme(axis.text.y = element_blank(),
+          legend.position = "bottom")
+```

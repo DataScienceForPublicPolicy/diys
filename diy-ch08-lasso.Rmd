@@ -1,0 +1,178 @@
+---
+title: 'DIY: Re-Visiting Health Care Coverage through LASSO'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 8*
+
+
+Let's revisit the health care targeting example and focus on the mechanics of applying LASSO regression. While there are many regularized regression packages, we recommend the `glmnet` package for general application of regularized regression and the `hdm` package for inference through LASSO.
+
+```{r, message = FALSE, warning = FALSE}
+#Load Package
+  pacman::p_load(glmnet, hdm)
+```
+
+ Many ML packages expect input data to be in vector or matrix form. Recall from earlier chapters that matrices do not support mixed data types. A matrix containing both wages (continuous variables) and citizenship (discrete variables), for example, is stored as strings, posing a challenge for prediction. We can solve this format issue by converting discrete variables into a *dummy variable matrix* also referred to as *one hot encoding* in computer science parlance. A variable with $g$-number of classes is replaced with a matrix of $g$ variables, each of which contains binary indicators for the class. To avoid the *dummy variable trap* -- a situation in which one class can be predicted by all others, always remember that a $g$-class variable should yield a matrix with $(g-1)$ variables. Below, we load `health_wide` --  a re-processed version of the `health` data set that reflects these format requirements. 
+
+
+
+```{r, message = FALSE, warning = FALSE}
+#Load data set
+  load("data/acs_health_expanded.Rda")
+```
+
+
+*__LASSO-Driven Prediction__*. We split the sample into train and test sets, creating a pair of vectors for the target $y$ and a pair of matrices for inputs $x$. Our example below makes the assumption that we would like to consider all available variables in the data set.
+
+
+
+```{r, message=FALSE, warning=FALSE}
+# Randomly assign
+  set.seed(321)
+  rand <- runif(nrow(health_wide)) > 0.7
+  
+# Subset train/test, drop ID variable, convert to matrix
+  y_train <- as.vector(health_wide[rand == T, 2])
+  x_train <- as.matrix(health_wide[rand == T, -c(1:2)])
+  y_test <- as.vector(health_wide[rand == F, 2])
+  x_test <- as.matrix(health_wide[rand == F, -c(1:2)])
+  
+```
+
+
+
+
+The `glmnet` package is more flexible than any single LASSO or Ridge regression. It is built to estimate an elastic net regression that is a hybrid of *both* LASSO $l_1$ and Ridge $l_2$ penalties. In addition to tuning $\lambda$, a new tuning parameter $\alpha$ bounded between 0 and 1 controls whether the penalty will resemble more of a Ridge or a LASSO. In our case, we are interested only in variable selection, making our choice of simple: set $\alpha=1$ to make use of the LASSO.
+
+$$l(\beta) = \sum^n_{i=1} [y_i\hat{y_i}-log(1+e^{\hat{y}})] - \lambda [\alpha \sum_{k=1}^K |\beta_k| + (1-\alpha)  \sum_{k=1}^K |\beta_k|^2]$$
+
+This still requires us to identify the optimal value of $\lambda$ through cross validation. The `cv.glmnet` vastly simplifies the process by conducting the grid search: 
+
+> `cv.glmnet(x, y, family, cost, K)`
+
+> where:
+
+> - `x` and `y` are the input variable in matrix format and the target variable in vector format, respectively. 
+> - `alpha` is the elastic parameter in which $\alpha = 1$ is a LASSO and $\alpha = 0$ is a Ridge.
+> - `family` indicates the type of model such as `"binomial"`.
+> - `type.measure` is the loss function used to evaluate model fitness during cross validation such as `auc` or `deviance`.
+> - `nfolds` is the number of partitions used for cross validation. Default set to 10. 
+
+
+
+
+```{r, message=FALSE, warning=FALSE}
+  lasso.mod <- cv.glmnet(x = x_train, y = y_train, 
+                         alpha = 1,
+                         family = "binomial",  
+                         type.measure = "auc")
+```
+
+
+
+
+The model outputs contain rich detail about the influence of $lamba$ on the tuning results.  As seen in Graph (A),  accuracy is generally higher when the model contains more input variables with an optimum between $-7 < log(\lambda) < -6$. When $log(\lambda)$ is overly restrictive, model performance drops precipitously.  The coefficient paths in Graph (B) show how fickle coefficients can be. Some can take on a wide range of values while others are relatively stable, but regardless of the variable LASSO force all coefficients to zero.
+
+
+
+```{r, eval = FALSE}
+# (a) Cross Validated AUC
+  plot(lasso.mod)
+
+# (b) Coefficient Paths
+  plot(lasso.mod$glmnet.fit, xvar = "lambda")
+```
+
+```{r, fig.cap = "Two graphs that illustrate the effect of tuning the hyperparameter log(lambda). For analytical convenience, log(lambda) is logarithm transformed.  Graph (A) shows that as the shrinkage parameter is increased, the AUC falls. (B) Coefficient paths trace how a variable's coefficient evolves for each value of log(lambda), converging to zero at high values of the hyperparameter.", fig.height = 3.5, echo = FALSE}
+  par(mfrow = c(1,2))
+  plot(lasso.mod, sub = "(A) Cross Validated AUC", cex.sub = 0.8, xlab = "log(Lambda)", cex = 0.7)
+  plot(lasso.mod$glmnet.fit, xvar = "lambda", xlab = "log(Lambda)",
+           sub = "(B) Coefficient Paths", cex.sub = 0.8, cex = 0.7)
+```
+
+
+It will be tempting to tell a data-driven story from LASSO coefficients. In fact, it should be a part of any adoption strategy for any prediction problems. But LASSO does not provide generalizable parameter estimates. Nonetheless, a story informed by a cursory review of the LASSO coefficients can go a long way towards trust in the predictions. We can extract the results associated with the optimized model using `coef.cv.glmnet`, setting the optimal value $\lambda$ by specifying `s = "lambda.min"`. Rather than focusing on the coefficient magnitudes, take advantage of the zero and non-zero coefficients to start a conversation about normative assumptions -- *does the model reflect what one might expect?* *Can you trust how the model discounts certain variables?*
+
+
+```{r}
+  opt_coef <- coef.cv.glmnet(lasso.mod, s = "lambda.min")
+```
+
+
+
+Lastly, producing predicted probabilities is as simple as setting `s = "lambda.min"`. With the results ready, we can once again use the probabilities to guide recommendation engines and prioritization of tasks.
+
+
+
+```{r}
+#Predict the target
+  yhat <- predict(lasso.mod, x_test, s = "lambda.min", type = "response")
+```
+
+
+
+*__Inference with LASSO regression__*. Let's now consider an inferential problem using LASSO: *What's the effect of citizenship on health insurance coverage?* To answer this simple question, the Double LASSO selection procedure can be applied to tease out the effect of citizenship on the health care story. The `hdm` package implements the procedure in the function `rlassologitEffect`, seamlessly estimating each stage of the selection process:
+
+
+> `rlassologitEffect(x, d, y)`
+
+> where:
+
+> - `x` is a matrix of control variables.
+> - `d` is a vector containing the focal variable.
+> -  `y` is the target variable.
+
+The coded example below illustrates that non-citizens are five times more likely (coefficient is $\beta = 1.735$, thus the effect is $e^{1.735}$) to be uninsured than citizens. Unlike the LASSO estimates produced by `glmnet`, the `hdm` estimate is unbiased and generalizable. This result is not much different than that of the plain vanilla logistic regression, but imagine a scenario when the number of parameters $k$ is large. We can see that this procedure could enable generalizable inference at scale.
+
+
+
+
+
+```{r, eval = FALSE}
+#Set target and focal variable
+  target <- health_wide$no.coverage
+  focal <- health_wide$cit.non.citizen
+  
+#Set x, removing the id, target, and focal variables
+  controls <- as.matrix(health_wide[,-c(1,2,5)])
+
+#Estimation
+  logit.effect <- rlassologitEffect(x = controls, 
+                                  d = focal, 
+                                  y = target)
+#Summarize results
+  summary(logit.effect)
+```
+
+```{r, echo = FALSE, eval = F}
+#Set target and focal variable
+  target <- health_wide$no.coverage
+  focal <- health_wide$cit.non.citizen
+  
+#Set x, removing the id, target, and focal variables
+  controls <- as.matrix(health_wide[,-c(1,2,5)])
+
+#Estimation
+  logit.effect <- rlassologitEffect(x = controls, 
+                                  d = focal, 
+                                  y = target)
+#Summarize results
+  outputs <- data.frame(var = "Citizenship: No",
+                        beta = round(logit.effect$alpha,3),
+                        std = round(logit.effect$se, 3),
+                        rate = "***")
+  knitr::kable(outputs, 
+        booktabs = TRUE, 
+        caption = "Post-Selection Coefficient Estimate for Citizenship.",
+        col.names = c("","Coef.", "SE", ""),
+        row.names = F)  
+```
+
+
+

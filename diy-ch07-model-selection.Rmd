@@ -1,0 +1,152 @@
+---
+title: 'DIY: Choosing between regression models'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 7*
+  
+
+Let's move beyond the rules and diagnostics of regression and put it into action using the house price data. Our goal in this DIY is to estimate a set of regressions, evaluate the pros and cons of each, and select the "best" specification. The challenge, however, is that the best model might be different for each use case. The model that provides the clearest story may not necessarily be the one that produces the best model fit. We investigate these tradeoffs in this section.
+
+Let's estimate four regressions where each successive specification adds more variables and complex elements:
+
+- Model 1 (`mod1`) regresses sales prices and building area;
+- Model 2 (`mod2`) adds borough as a categorical variable;
+- Model 3 (`mod3`) incorporates an interaction to estimate borough-specific slopes for building area;
+- Model 4 (`mod4`) adds land area.
+
+By gradually build up the model, we can show the relative effects and contributions of each variable giving a sense of what is important for interpretation and what is important in capturing the variation in the data.
+
+```{R ch7-read-sales-data, warning = F, message = F, results = 'hide'}
+#Load package
+  pacman::p_load(readr)
+
+#Read in .csv of property sales
+  sale_df <- readr::read_csv("data/home_sales_nyc.csv")
+
+#Simple regression
+  mod1 <- lm(sale.price ~ gross.square.feet,
+             data = sale_df)
+
+#With borough
+  mod2 <- lm(sale.price ~ gross.square.feet + factor(borough),
+             data = sale_df)
+  
+#Interaction
+  mod3 <- lm(sale.price ~ gross.square.feet*factor(borough),
+             data = sale_df)
+  
+#With Additional variables
+  mod4 <- lm(sale.price ~ gross.square.feet*factor(borough) + land.square.feet + age,
+             data = sale_df)
+```
+
+*How well does each model perform in practice?* We can easily see performance when overlaying the fitted model on the actual series. In Figure \@ref(fig:fourplotdiy), we plot the actual (black points) and predicted sale prices (red points) by gross square footage. Each graph's label contains the BIC score, which can be extracted from a model object by specifying:
+
+```{r, eval = FALSE}
+#How to obtain the BIC and AIC from a model object
+  BIC(mod1)
+  AIC(mod1)
+```
+
+In an ideal model, the red and black points would perfectly overlap. Model 1, however, is overly simplistic -- it misses most of the point cloud. Model 2 is an improvement -- by accounting for the naturally different price points by borough.  Model 3's interactions between gross square footage and borough show that the price curve is different in each part of the city; However, the predictions still resemble five straight lines. By adding land area and building age in Model 4, the predictions cover more area. From visual inspection, it is clear that Model 4 offers the best performance. Furthermore, BIC is also at a minimum with Model 4 indicating that it is the best relative choice. 
+
+If we are interested in *predicting* the values, is Model 4 good enough? There are specific guidelines for how to construct accurate predictions, which we will cover in the next chapter. However, using the models that we have before us, we can obtain the best case scenario for model performance by applying `summary` to the model object `mod4`. The Residual standard error (*RMSE*) is $RMSE = 384,415$. On the surface, this might not mean much without context, but when considering that the average housing price in the sample is $\bar{y} = 665,012$, the value is quite large. In practice, if Model 4 were applied in the wild and produced a prediction of $\hat{y} = 300,000$, the confidence interval on $\hat{y}$ would be include zero! In other words, the price could be anyone's guess. Good predictions have small intervals -- reducing the uncertainty around the prediction.  
+
+Ultimately, our example above is illustrative of a *fitted* line -- quite different than a *predicted* line. The former shows how the model behaves when given the data it was estimated on, whereas the latter provides a sense of out-of-sample performance. In the next chapter, we distinguish between estimation, causal inference and prediction.
+
+
+```{r, fourplotdiy,  message=FALSE, warning=FALSE, error=FALSE, fig.cap = "Comparison of the four specifications plotted against gross square footage. Black points represent the actual sales prices while red points represented the fitted model. ", fig.height = 4}
+#Load package
+  pacman::p_load(ggplot2, gridExtra)
+
+#Base
+  base1 <- ggplot(sale_df, aes(x = gross.square.feet, y = sale.price/1000000)) + 
+            geom_point(colour = rgb(0,0,0,0.1), size = 0.8) +
+            geom_point(aes(x = sale_df$gross.square.feet, y = predict(mod1)/1000000),
+                       colour = rgb(1,0,0,0.2), size = 0.6) +
+            xlab("Gross Square Feet") + ylab("Sales Price ($MM)") + 
+            ggtitle(paste0("Model 1 (BIC = ", round(BIC(mod1)), ")")) + 
+            xlim(0, 3000) + ylim(0,3)
+  
+#Base2
+  base2 <- ggplot(sale_df, aes(x = gross.square.feet, y = sale.price/1000000)) + 
+          geom_point(colour = rgb(0,0,0,0.1), size = 0.8) +
+          geom_point(aes(x = sale_df$gross.square.feet, y = predict(mod2)/1000000),
+                     colour = rgb(1,0,0,0.2), size = 0.6) +
+          xlab("Gross Square Feet") + ylab("Sales Price ($MM)") + 
+           ggtitle(paste0("Model 2 (BIC = ", round(BIC(mod2)), ")")) + 
+          xlim(0, 3000) + ylim(0,3) 
+
+#Base3
+  base3 <- ggplot(sale_df, aes(x = gross.square.feet, y = sale.price/1000000)) + 
+          geom_point(colour = rgb(0,0,0,0.1), size = 0.8) +
+          geom_point(aes(x = sale_df$gross.square.feet, y = predict(mod3)/1000000),
+                     colour = rgb(1,0,0,0.2), size = 0.6) +
+          xlab("Gross Square Feet") + ylab("Sales Price ($MM)") + 
+           ggtitle(paste0("Model 3 (BIC = ", round(BIC(mod3)), ")")) + 
+          xlim(0, 3000) + ylim(0,3) 
+  
+#Base4
+  base4 <- ggplot(sale_df, aes(x = gross.square.feet, y = sale.price/1000000)) + 
+          geom_point(colour = rgb(0,0,0,0.1), size = 0.8) +
+          geom_point(aes(x = sale_df$gross.square.feet, y = predict(mod4)/1000000),
+                     colour = rgb(1,0,0,0.2), size = 0.6) +
+          xlab("Gross Square Feet") + ylab("Sales Price ($MM)") + 
+            ggtitle(paste0("Model 4 (BIC = ", round(BIC(mod4)), ")")) + 
+          xlim(0, 3000) + ylim(0,3) 
+  
+  grid.arrange(base1, base2, base3, base4, ncol = 2)
+
+```
+
+Despite the challenges with predicting housing price, we can still use the regression results to interpret patterns in the housing market. As we can see in Table \@ref(tab:reghouse)^[We used the `Stargazer` package to co-locate the four model into a regression table much like in academic papers.], the size of the regression coefficients change quite dramatically as new variables and interactions are added. The game is to find some combination of input variables that produce decent model performance (R-squared, BIC, AIC, RMSE) and with stable coefficients (i.e. the values do not fluctuate wildly with additional variables). Here, we point out a few key insights:
+
+*Model 1 versus Model 2*. The initial estimate for Gross SF is $+466.18$ in Model 1 but falls to $406.99$ in Model 2 with the inclusion of Boroughs. When we combine this insight with the sharp increase in the $R^2$ ($0.25$ to $0.42$), we can conclude that the first model was underfit -- it did capture enough of the variability in housing prices. 
+
+*Model 2*. The Borough variables are estimated relative to Borough 1 (Manhattan) -- one of the most expensive areas in the United States. The negative coefficients thus indicate that housing in other boroughs are, on average, worth \$2 million less than units in Manhattan. Interestingly, the Constant holds the natural underlying value of property in Manhattan and suggests that even when the property has zero area, the base price is +\$2.8 million. Boroughs are relatively coarse geographic units. Categorical variables with many levels (e.g. neighborhoods, zipcodes) can provide a more precise local estimate on price. But if *cells* in the data are too small (i.e. number of records per level in the categorical variable), predictions can become less stable and more noisy -- there simply is not enough information for the regression to learn from.
+
+*Model 3*. The introduction of interactions causes a large shift in the coefficients. The interpretation of Gross SF  is different -- it is the price in Manhattan, which explains the more than twofold increase in the value. To obtain the Gross SF for Boroughs 2 through 5, we need simply add the interacted coefficients. For example, to obtain Gross SF for Borough 2 from Model 3:
+
+$$\theta_{2} =\theta_{\text{GrossSF}}+\theta_{\text{GrossSF} \times \text{Borough 2}}$$
+
+In other words, by adding $1,043.44$ and $-817.22$, the price per square foot is \$226.22, which is markedly less than the price in Manhattan. The additional complexity increased the $R^2$ by 0.05 -- not as large as the change from Model 1 to 2, but is nonetheless useful. 
+
+Finally, in Model 4, we only see a modest improvement in model fit with the addition of the land area and building age variables. Unlike the other models, the size of the coefficients only shift slightly, suggesting that the additional variables have limited effect. Each regression helped to inform a statistical narrative about housing prices in New York: *There is an allure of some boroughs (higher relative price of Manhattan). Space is relatively scarce and comes at a premium (price per square foot).*
+
+
+```{r,  echo = FALSE, results = 'asis', warning=FALSE, message=FALSE}
+#Load Stargazer
+ pacman::p_load(stargazer)
+
+#Set up regression output
+ output1 <- capture.output(stargazer(mod1,mod2, mod3, mod4,
+                                     dep.var.labels = rep("Sales Price",4), 
+                                     column.labels = c("Area", "+ Borough", "+ Interaction",
+                                                       "+ Other Variables"),
+                                     label = "tab:reghouse",
+                                     title = "Regression coefficient table for four specifications.", 
+                                     single.row = F,
+                                     header = FALSE, 
+                                     digits = 1, 
+                                     df = FALSE,
+                                     covariate.labels = c("Gross SF", "Borough 2", "Borough 3",
+                                                           "Borough 4", "Borough 5", "Land SF", 
+                                                           "Building Age", 
+                                                           "Gross SF * Borough 2",
+                                                           "Gross SF * Borough 3",
+                                                           "Gross SF * Borough 4",
+                                                           "Gross SF * Borough 5",
+                                                            "Constant"))
+                           )
+
+#Output latex table
+ cat(output1,collapse = "\n")
+              
+```
+

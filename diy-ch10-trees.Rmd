@@ -1,0 +1,264 @@
+---
+title: 'DIY: Prototyping a wage prediction model with CART and Random Forests'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 10*
+  
+
+How much is a fair wage? Societies have pondered this question for ages, but perhaps more so in the modern age. There have been long standing concerns over the gender, ethnic, and racial pay gaps, which had seen progress at one point but more recently has stagnated [@genderpaygap, @pewpaygap]. To remedy these pay differentials, some US cities such as New York City and Philadelphia as well as states like California have banned employers from asking for applicant salary history [@salaryquestion]. What *should* be considered to be a fair wage? One way we can evaluate a wage is to predict it based on historical data on industry, experience and education while omitting demographic factors. In fact, decomposing the contributing factors, then predicting wages has been a task that policy researchers have long researched with the hope of better labor policy. For example, @efficiencywages examined wage differentials of equally skilled workers across industries, taking advantage of labor quality.
+
+In this DIY, we prototype a tree-based model to *predict* wages based on worker characteristics gathered from a widely used survey. *What can a wage model be used for?* Having an accurate prediction model can be used to evaluate if staff are under-valued in the market, which in turn can be used to pre-empt possible churn with pay increases. A wage model could help set expectations on employment costs, scoring new positions to support budgetary and human resources use cases. 
+
+__Data__. Drawing on the US Census Bureau's 2016 American Community Survey (ACS), we constructed a training sample (`train`) and test sample (`test`) focused on California. Each sample randomly draws a set of $n=3000$ records, mainly to reduce the computational overhead for this exercise while preserving the patterns in the data.^[The ACS is a probability sample with sampling weights. To produce population statistics from the data, we need to account for these weights; However, for this use case, we will treat each observation with equal weight.] The data have been filtered to a subset of employed wage earners (`> $0 earned`) who are 18 years of age and older. Each sample contains the essential variables needed for predicting fair wages, namely experience, education, hours worked per week, among others:
+
+- `id` is a unique identification number
+- `wage` of the respondent in 2016.
+- `exp` is the number of years of experience (approximated from age and education attainment)
+- `schl` is the highest level of education attained.
+- `wkhp` is the hours worked per week.
+- `naics` is a NAICS code used to identify the industry in which the respondent is working.
+- `soc` is a description for the Standard Occupation Code (SOC) used for job classification.
+- `work.type`. Class of worker indicates whether a respondent works for government, for-profit business, etc.
+
+
+```{r, warning=FALSE, message=FALSE}
+#Load data
+ load("data/wages.Rda")
+```
+
+Let's get to know the data. In Figure \@ref(fig:wagecor1), we plot the relationship of wage against each years of experience, indicating that wages increase with each additional year of experience up to 20 years, plateaus for 20 years then gradually declines after 40 years. While there is a clear central trend, each person's experience is quite variable -- some achieving high salaries even while the age trend declines. The value of education, as seen in Figure \@ref(fig:wagecor2), also has an impact on wages, but it is only realized once enough education has been accumulated. In fact, the box plot suggests that median wage only grows at an accelerated pace once an individual attains an Associate's Degree. There is a large increase in the median wage among Bachelor's to Master's degree holders, although the wages of high-powered Bachelor's rivals the earning potential of graduate degree holders. In both cases, the wages are dispersed around the experience and education trends, suggesting that a multitude of other factors play roles as well. 
+
+
+```{r wagecor1, echo = FALSE, fig.cap = "Wage by years of experience.", fig.height = 2.5}
+ 
+pacman::p_load(ggplot2, gridExtra)
+
+#Scatter plot of wage 
+ plot1 <- ggplot(train, aes(x = exp, y = wage)) + 
+       geom_point(colour = "darkgrey", alpha = 0.15, shape=16) + 
+       xlab("Years of Experience") + ylab("Wage") + 
+       geom_smooth(se=F, method = "loess", span = 0.2, colour = "#4472C4")+
+       theme_bw() + 
+       theme(plot.title = element_text(size = 10),
+          axis.text=element_text(size=10),
+          axis.title=element_text(size=10)) 
+ 
+#Box Plot of Education attainment
+ train2 <- train
+ train2$schl <- substr(as.character(train2$schl), 1, 14)
+ plot2 <- ggplot(train2, aes(schl, wage, fill = schl)) + 
+      geom_boxplot(show.legend = FALSE) + coord_flip() +
+      ylab("Wage") + xlab("") + 
+      theme_bw() + 
+      theme(legend.position = "none",
+         plot.title = element_text(size = 10),
+          axis.text=element_text(size=8),
+          axis.title=element_text(size=9)) 
+
+ plot1
+```
+
+```{r wagecor2, echo = FALSE, fig.cap = "Wage by education attainment.", fig.height = 4, fig.align='center'}
+ plot2
+```
+
+__Training__. When we train algorithms, we should take advantage of the interactions between type of job, industry, role among other factors to produce richer more accurate predictions and tree-based algorithms such as CART (`rpart` package) and Random Forest (`ranger` package) are perfect for this type of problem. But which tree-based algorithm would work best? The answer lies in a computer science tradition that pits two or more models against one another in a *horse race*. Through cross validation, we can compare Root Mean Squared Error (RMSE) that penalize larger errors in order to identify which algorithm is the all-around best. 
+
+```{r, message = FALSE, warning=FALSE}
+#Load packages
+ pacman::p_load(caret, rpart, ranger)
+```
+
+A fair horse race places all algorithms on the same field under similar conditions. For setting up model comparisons, we train the algorithms in a five-fold cross validation design.^[The number of folds could be increased but with greater time cost. As you will see when we begin training the models, the Random Forest will take some time to run. If the number of folds were increased, we not only would obtain more precise model accuracy estimates but the time required also increases. Thus, we select a smaller value for demonstration purposes.] As for the input variables, we could hand-select a set that we believe best represents wages at the risk of biasing the predictions. Alternatively, we "*toss in the kitchen sink*" in which all variables are included in all models, allowing the algorithm to identify the most statistically relevant variables. 
+
+```{r, message = FALSE, warning = FALSE, results='hide'}
+#Validation control
+ val_control <- trainControl(method = "cv", number = 5)
+
+#Specification
+ input_formula <- as.formula("wage ~ exp + schl + wkhp + naics + soc + work.type")
+```
+
+To tap into the power of each of these algorithms, we once again rely on `caret` to interface with the relevant packages. 
+
+*__CART__*. To train CART model in `caret`, we specify `method = "rpart"` along with the data and model formulation. The data scientist's work lies in tuning the complexity parameter `cp` that controls how deep the CART grows. When $cp = 0$, a CART can grow to its fullest, otherwise, any value $0 \leq cp \leq 1$ will limit the extent to which the tree will grow -- essentially a stopping criteria. For a prototype, an approximate solution will do. By setting the `tuneLength = 10` argument, `caret` will test ten different `cp` scenarios, keeping the value that minimizes the loss function. The code below trains a regression tree on all available inputs, excluding the `id` column (column one).
+
+\vspace{12pt} 
+```{r, message = FALSE, warning = FALSE, results='hide'}
+#Set seed for reproducibility, then train 
+ set.seed(123)
+ fit_rpart <- train(input_formula, 
+         method = "rpart", 
+         data = train[, -1], 
+         tuneLength = 10, 
+         trControl = val_control)
+```
+\vspace{12pt} 
+ 
+Let's take a look at the results captured in `fit_rpart$results` as shown in Table \@ref(tab:plotcp1). As the `cp` value falls to zero, the model becomes more complex and "soaks up" more of the patterns in the data, which in turn causes the error to fall sharply. It also becomes clear how sensitive CART performance is to tree complexity -- if it is not complex enough, the model will produce underwhelming results that miss the mark. Overly complex trees, in contrast, produce noisy results. Finding the Goldilocks value of `cp` is of paramount importance. 
+
+*Pro Tip:* Although the lowest `cp` value has the best performance (lowest RMSE), it is statistically indistinguishable from other `cp` values that are within one standard deviation of the lowest RMSE. A well-accepted rule of thumb, as proposed in @esl2001, is to *choose the largest `cp` value that is still within one standard deviation of the lowest RMSE*. In effect, this decision theoretic defaults to the simplest model available that does not lead to substantial loss in accuracy. A smaller tree also has a higher chance of being articulated to less technical audiences. `caret` automatically identifies and stores the optimal `cp` value in `fit_rpart$bestTune`. Despite tuning the CART model, even the best model has relatively modest performance -- perhaps a Random Forest can offer an improvement.
+
+
+```{r, message = FALSE, warning = FALSE, fig.height = 3, echo = FALSE, results='asis'}
+ tab <- fit_rpart$results
+ for(i in 2:ncol(tab)){
+  tab[,i] <- round(tab[,i],3)
+ }
+ 
+ for(i in c(2,4,5,7)){
+  tab[,i] <- round(tab[,i])
+ }
+
+colnames(tab) <- c("cp", "RMSE", "R-Squared", "MAE", "SD(RMSE)", "SD(R2)", "SD(MAE)")
+pander::pander(tab, 
+        caption = "(\\#tab:plotcp1) Cross-validated performance for each level of tree complexity.", 
+        split.table = Inf, 
+         justify = "left", style='grid')
+```
+
+
+
+Since the *__Random Forest__* algorithm grows hundreds of trees, we need a package that is built to scale. The `ranger` package was developed with this in mind, making it a perfect choice for general data science applications. Through `caret`, we train a Random Forest model by specifying `method = "ranger"` and tune four hyperparameters:
+
+> - `mtry` (optional) is the number of variables to be randomly sampled per iteration. Default is $\sqrt{k}$ for classification and $\frac{k}{3}$ for regression. Default set to the square root of the number of variables.
+> - `ntree` (optional) is the number of trees. Default is 500.
+> - `min.node.size` (optional) is the minimum size of any leaf node. The default settings vary by modeling problem. For example, the minimum for regression problems is $n=5$, whereas the minimum for classification is $n=1$.
+> - `max.depth` (optional) as the maximum number of splits between a tree stump (one split) and a fully grown tree (unlimited). This is similar to a stopping rule in CART. By default, `max.depth = NULL` indicating unlimited depth.
+
+We could task `caret` to test a large number of automatically selected scenarios by setting `tuneLength`. To save on time, we instead specify sensible default hyperparameters: each tree sub-samples $\sqrt{k}$ variables per tree ($mtry = 24$ in this case).^[As each level of a categorical variable (e.g. `soc`, `naics`, `schl`) is treated as a dummy variable, we test $mtry = 24$.] 
+
+*An aside: why not tune the Random Forest?* Random Forests are computationally intensive and conducting a grid search can be time consuming. As an initial prototype, the objective is to produce *something* that is as accurate but operational as possible to prove that the concept works. *Show the thing* and prioritize speed. A Random Forest trained even with default hyperparameters generally offers improvements over CART and linear regression. Thus, testing a single hyperparameter set might yield a clear gains over the alternative CART -- a good zero-to-one improvement -- a version 1 (v1). If we see little or no improvement, then we can assume that a Random Forest could require more exhaustive effort to optimize -- a good candidate for a version 2 effort (v2). 
+
+Since `ranger` is built for speed, it foregoes diagnostic calculations like variable importance that slow the training process. Simply specifying `importance = "impurity"` in the model call instructs `ranger` to retrieve the goodness of fit-based measures during training.
+
+```{r, message = FALSE, warning=FALSE}
+#Set hyperparameters for default
+ scenarios <- expand.grid(mtry = 5,
+              splitrule = "variance",
+              min.node.size = 5)
+
+#Train and cross validate through user-specified grid search
+ fit_rf <- train(input_formula, 
+         method = "ranger", 
+         data = train[, -1],
+         trControl = val_control,
+         tuneGrid = scenarios,
+         importance = "impurity")
+```
+
+\vspace{12pt}
+
+
+__Evaluating models__. Whereas the best CART model has a $RMSE = $`r round(min(fit_rpart$results$RMSE))` with $R^2 = $`r round(max(fit_rpart$results$Rsquared),2)`, our Random Forest scenario performs markedly better with a $RMSE = $`r round(min(fit_rf$results$RMSE))` and $R^2 = $`r round(max(fit_rf$results$Rsquared),2)`.^[Note that exact results will differ slightly from one user to the other due to the random sampling in cross validation.] The decision is an easy one: lean on the Random Forest. 
+
+*Raw accuracy is hard to sell, even if the performance gains are large.*^[Contextualized performance gains in terms of dollars and lives saved are a different story, however.] What is satisfactory for a data scientist might not be for policy makers -- there is a need for a policy narrative that maps where an algorithm or program in the normative. There is a need for closure and transparency, especially when decisions are being made. 
+
+Whereas CART lends self to producing profiles, Random Forests are a different breed. To begin the unravel the mysteries that the Random Forests has learned, we can rely on variable importance metrics contained in the `fit_rf` object to tell that story. As shown in Table \@ref(tab:varimp1), the Random Forest derives the most information from number of hours worked (`wkhp`), followed by years of experience (`exp`) and various levels of education attainment (`schl`). Remember, importance does not show direction of correlation, but rather shows how much the algorithm relies on a variable to split the sample. 
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+#Set up
+ #vi_rpart <- as.vector(varImp(fit_rpart)$importance)
+ vi_rf <- as.vector(varImp(fit_rf)$importance)
+
+#Get top 5 as two different columns
+ tab_vi2 <- data.frame(var = tolower(row.names(vi_rf)),
+           vi = vi_rf)
+ tab_vi2 <- tab_vi2[order(-tab_vi2$Overall),]
+ 
+ tab_vi3 <- cbind(tab_vi2[1:5,], tab_vi2[6:10,])
+ row.names(tab_vi3) <- NULL
+ 
+colnames(tab_vi3) <- c("Variable", "Importance", "Variable", "Importance")
+pander::pander(tab_vi3, caption = "(\\#tab:varimp1) Top 10 most important variables from the Random Forest model.", 
+        split.table = Inf,
+         justify = "left", style='grid')
+```
+
+Let's take the analysis one step farther and visualize the *shape* of the underlying relationships. Partial dependence plots (`pdp` package), for example, render a trained algorithm in a lower dimensional space to expose the average relationship between a model's predictions and its continuous variables. Figure \@ref(fig:altvisuals) plots the partial dependence for years of experience (`exp`), finding that the Random Forest's predictions `yhat` mold to the non-linear trend that we had previously seen in the EDA. The gain in wages with each additional year is relatively modest in the long run, but are quite large early in one's career. 
+
+
+```{r, altvisuals, message = FALSE, warning=FALSE, fig.cap = "Partial dependence plot for years of experience.", fig.height = 2.8}
+#Load packages
+ pacman::p_load(pdp)
+
+#Partial Dependence Plot using pdp
+ partial(fit_rf, 
+     pred.var = "exp", plot = TRUE,
+     plot.engine = "ggplot2") +
+     ggtitle("Years of Experience") + 
+     theme_bw() + 
+     theme(plot.title = element_text(size = 10)) 
+```
+
+At the individual record level, Local Interpretable Model-Agnostic Explanations (LIME) can approximate the effect of each input variable on the target [@breakdown]. For non-parametric algorithms like Random Forest, effect decomposition is not normally possible; However, as implemented in the `broken` function in the `breakDown` package, the LIVE technique approximates the effect by creating an artificial data set in the near proximity around each single observation, then identifies input variables that cannot be modified without resulting in a significant impact on prediction for the observation in question. Figure \@ref(fig:altvisuals2) maps the input variable impacts on one observation. Whereas the baseline is the average wage in the sub-sampled data (just over 50,000), the prediction is equal to the baseline wage plus the final prognosis (around *-9600*). *How did we arrive at that number?* This particular worker has a bachelors and has a full-time job in a company -- the market pays for these attributes, but does not reach their full potential as wages tend to be lower for retail sales. Keep in mind that the decomposition is controlled to the prediction $\hat{y_i}$ -- the insights are only useful if the algorithm achieves a high degree of accuracy.
+
+```{r, altvisuals2, fig.height = 3, message = FALSE, warning=FALSE, fig.cap = "Break down decomposition plot for a single observation. As breakDown can require significant computational resources with large data sets, we approximate the decomposition by providing a random subsample of n = 1000 observations."}
+#Load packages
+ pacman::p_load(breakDown)
+
+#Obtain break down for the 100th observation in train
+ bd_plot <- broken(fit_rf, 
+          baseline = "intercept",
+          new_observation = test[2500, -1],
+          data = train[sample(1:nrow(train), 1000), -c(1:2)]) 
+ plot(bd_plot, add_contributions = F) 
+```
+
+
+__Producing predictions__. Random Forests produce predictions $\hat{y}_i$ like any other algorithm by making use of the `predict` function. Below, the trained model scores the `test` set.
+
+```{r, eval = F}
+ yhat_rf <- predict(fit_rf, test[, -1])
+```
+
+The `caret` interface, however, only makes use of the point estimate for the Random Forest algorithm, which is generally suitable for most policy applications. However, it might be beneficial to embrace the variability in predictions -- the value of $\hat{y}_i$ is just one prediction from many in a probability distribution. We can fall back on using the `ranger` package itself to take advantage of Quantile Random Forests (QRF), as developed in @meishausen2006, to produce quantile predictions. In the code snippet below, `ranger` trains a QRF, then scores the `test` sample to retrieve $\hat{y}_i$ at the 10th, 50th and 90th percentiles. An alternative draws on each subsampled tree's predictions by specifying `predict.all = TRUE`.
+
+```{r}
+#Train Quantile Random Forest
+ fit_qrf <- ranger(input_formula, 
+         data = train[, -1],
+         quantreg = TRUE)
+
+#Make predictions for 10%, 50%, and 90%
+ yhat_qrf <- predict(fit_qrf, test[, -1], 
+           type = "quantiles")
+ 
+#Retrieve matrix of all predictions
+ yhat_all <- predict(fit_qrf, test[, -1], 
+           predict.all = TRUE)
+```
+
+Thinking about the probabilistic aspect of prediction can enable compelling use cases. In the set of small multiples in Figure \@ref(fig:distromulti), we can see thatexactly 24 randomly sampled individuals' wages fall in relation to the predictions made by the ensemble. For the most part, the 10th and 90th percentile predictions flank the actual wage, serving as useful guidelines. In the case of setting, negotiating, and budgeting for wages, these prediction intervals can be helpful to set the "ballpark". For analyzing pay equality, one could use the Random Forest to predict the possibilities for one's wage's devoid of demographics, providing a more unbiased way of evaluating fairness in pay. In any case, the model needs to be made available in as a service that allows anyone to score worker characteristics. As we will see in Chapter 13, trained algorithms can be rolled into a *data product* -- the last mile that allows data science to be valuable to users. 
+
+
+
+```{r, distromulti, fig.cap = "Kernel density plots of predictions from 500 trees compared with an individual's actual wage. The black dashed line represents a single wage's wage, the grey dashed lines are the 10th and 90th prediction percentiles, whereas the kernel density contains all the predictions.", echo = FALSE, fig.height=3}
+ 
+#(1) Set plot grid 
+ par(mfrow = c(4,6), mar = c(0,0,1,0))
+
+#Loop through all groups
+ for(i in sample(1:3000, 24)){
+  
+  plot(density(yhat_all$predictions[i,]),
+     col = "white", axes = FALSE,
+     xlab = "", ylab = "", 
+     font.main = 1, cex.main = 0.8, lwd = 0.1,
+     main = "")
+   polygon(density(yhat_all$predictions[i,]),
+     col = "lightblue", lwd = 0.1)
+   abline(v = test$wage[i], lty = "dashed", col = "black")
+   abline(v = yhat_qrf$predictions[i,1], lty = "dashed", col = "darkgrey")
+   abline(v = yhat_qrf$predictions[i,3], lty = "dashed", col = "darkgrey")
+  }
+
+ 
+```

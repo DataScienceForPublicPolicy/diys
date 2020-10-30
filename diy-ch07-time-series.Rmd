@@ -1,0 +1,196 @@
+---
+title: 'DIY: Housing prices over time'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 7*
+  
+Time series data are the de facto choice for measuring and tracking trends over time. Most macroeconomic data, for example, are time series that summarize an economy's performance and provide a way to gauge how global events influence the markets. In the United Kingdom, housing prices are closely monitored to understand affordability and the health of the economy. Estimated by the UK's Office of National Statistics using data from HM Land Registry, the UK's Housing Price Index (HPI) measures the price level of real estate by applying a hedonic model to distill the value of housing holding all else constant (@ukhpi). But when the price levels are strung together as a time series, it is easy to see how the market evolves over time. As seen in Figure \@ref(fig:hpiup), the housing price index was relatively flat until 2013, then prices began to sharply increase  -- there is an clear upward *trend.* The price gently fluctuates over the course of each year following a regular, fairly predictable pattern -- this is a sign of *seasonality*.
+
+```{r, hpiup,  warning = FALSE, message = FALSE, fig.cap = "UK Housing Price Index (Jan 2010 to Oct 2019)." , fig.height = 2.5}
+#Load package
+  pacman::p_load(forecast, ggplot2)
+
+#Load file
+  uk <- readr::read_csv("data/ukhpi.csv")
+
+#Set date variable
+  uk$date <- as.Date(paste(uk$year, uk$month, 1, sep = "/"))
+  
+#Plot
+  ggplot(uk, aes(x = date, y = avg.price)) + geom_line() + 
+    xlab("Date") + ylab("Average Price (Pound Sterling)")
+```
+
+In this DIY, we illustrate how to tame a time series and extract insights seasonal patterns and construct a simple forecast. When working with time series, there are special rules that we need to follow. We thus begin by describing the *components* of a time series and the assumption of *stationarity*, then we dive into approaches modeling strategies. To start, let's import the HPI from `ukhpi.csv`. 
+
+
+```{r, for-show, eval = FALSE}
+
+#Load package
+  pacman::p_load(forecast, ggplot2)
+
+#Load file
+  uk <- readr::read_csv("data/ukhpi.csv")
+  
+#Set data as a time series object
+  train <- ts(uk$avg.price, start = c(2010,1), freq = 12)
+
+```
+
+
+*__Some ground rules__*. Recall the brief aside about Chapter 6. Any time series can be described in terms of three components:
+
+$$Y = T + S + R$$
+
+Where the $T$ is a *trend*, $S$ is *seasonality*, and $R$ is the *noise* component -- the leftover information that is not explained by the trend or seasonality. Each of these components hold a piece of the story of HPI.
+
+Statisticians had discovered in the early days of time series that the data needs to be *stationary* in order for analyses to be generalizable. When a series drifts up or down unpredictably, it becomes a moving target -- its mean and variance will change with the trend over time and its autocorrelation structure (how a series is correlated with its past values) could also change -- it is *non-stationary*. A *stationary* time series exudes stability -- it has a constant mean and variance and a stable autocorrelation structure over time. 
+
+*How do we identify a stationary series in practice?* First, we should introduce the mechanism for  stabilizing a time series: *differencing*, or subtracting the previous period from the current ($y_t' = y_t - y_{t-1}$). Any time series object can be differenced in `R` applying the `diff` function to a vector or time series object.^[When differencing a series, we automatically lose one observation. For example, taking a difference ($d=1$) leaves $n-1$ observations.]  Differencing, in effect, calculates a period-to-period change. Such a simple idea can collapse time series with a trend into an oscillating pattern with a mean of zero -- it is quite powerful. 
+
+The question then is whether a series requires differencing. Fortunately, statisticians and economists have devised a battery of tests that build evidence that a series is non-stationary (or the contrary):
+
+- *Graph the series*. Stationary time series do not exhibit a trend. HPI, in contrast, clearly grows over time, indicating possible non-stationarity. 
+- *Calculate* $\sigma$. If we take the difference of a series and find its standard deviation $\sigma$ falls by half, the time series may be non-stationary. If we were to difference an already stationary series,  $\sigma$  could actually *increase*.  The  $\sigma_{HPI}$ falls from $24,411$ to $1,242$ when differenced -- more evidence of non-stationarity.
+- *Correlograms* plot a series' autocorrelation function (ACF) -- the correlation between a series and its past values known as *lags*. In Figure \@ref(fig:acfcor), the first bar measures the relationship between the current period ($t$) and last period ($t-1$) --  the correlation between $y_t$ and $y_{t-1}$. The second bar is the correlation between $y_t$ and $y_{t-2}$, and so on. A stationary series' ACF quickly falls to zero with each subsequent lag. However, the ACF in Graph (A) falls slowly -- ever-so-slightly over 24 lags -- adding to the evidence of non-stationarity. In contrast, the correlogram of the differenced series (Graph (B)) shows a seasonal ACF pattern -- a much better behaved series than its raw version. 
+
+In short, the HPI is non-stationary and should be differenced. There are many other tests that lend more support, such as the Augmented Dickey Fuller Test (ADF test) and Unit Root tests. 
+
+
+```{r, eval = FALSE}
+#This is 
+#(A) Calculate ACF for unemployment
+  acf_level <- autoplot(acf(train)) 
+
+#(B) Calculate ACF for first difference
+  acf_diff <- autoplot(acf(diff(train))) 
+  
+#Plot 
+  grid.arrange(acf_level, acf_diff, ncol = 2)
+```
+
+```{r, acfcor, fig.cap = "Correlograms of the unemployment series, unadjusted and differenced. ", echo = FALSE, fig.height = 2}
+
+#Set digits
+  scaleFUN <- function(x) sprintf("%.2f", x)
+
+#Set time series
+  train <- ts(uk$avg.price, start = c(2010,1), freq = 12)
+
+#Calculate ACFs and plot
+  acf_level <- autoplot(acf(train, plot = FALSE)) + 
+              ggtitle("(A) ACF on unemp.") + 
+              scale_y_continuous(labels=scaleFUN)
+  
+#First diff
+  acf_diff <- autoplot(acf(diff(train), plot = FALSE)) + 
+    ggtitle("(B) ACF on first difference") + 
+              scale_y_continuous(labels=scaleFUN)
+              
+
+
+#Plot 
+  grid.arrange(acf_level, acf_diff, ncol = 2)
+```
+
+
+__*Quantifying the seasonal patterns*.__  Time series models can be quite complex with complex names like Autoregressive Integrated Moving Average (ARIMA) and Long-Short Term Memory (LSTM) algorithms. There are, however, simpler and deterministic approaches that make use of an ordinary regression framework. With a differenced time series, we can model  seasonality through a *seasonal dummy* model: for a monthly series, we include 11 dummies, allowing the 12th month to be absorbed by the constant $\beta_0$: 
+
+$$y_{t} = \beta_0 +\delta_1 m_{t,1} + ... + \delta_{11} m_{t,11} + \varepsilon_t$$
+Notice that we have replaced the record index $i$ with $t$ for time index. Seasonal coefficients are the *average* of each month's price change and should be interpreted *relative* to the reference month. To put this into action, we need to first construct a differenced time series (`diff.series`), which then can be regressed on each month dummy.^[Because differencing yields $n-1$ records, we add an `NA` value at the beginning of the differenced series so the transformed series can be assigned to a column in `uk`.] 
+
+```{r, results='hide'}
+#Difference the series
+  uk$diff.series <- c(NA, diff(uk$avg.price))
+
+#Run linear model
+  mod_diff <- lm(diff.series ~ factor(month), data = uk)
+```
+
+When we apply `summary` to the regression object, we can infer when housing prices are more expensive. Figure \@ref(fig:dwplot) visualizes the regression coefficients and their confidence intervals as a dot-whisker plot. Coefficients whiskers that cross the dashed line are not likely statistically significant at the 5% level. The plots indicate that peak prices occur in July (month 8), fetching on average \£3,011 (+/- 737.2) more than the reference period, January.  Interestingly, the patterns in September and October are less clear -- the coefficients are not statistically significant at the 5% level. Thus, we can infer that houses sold during the the summer fetch higher prices.
+
+```{r, dwplot, echo = FALSE, message=FALSE, error = FALSE, warning=FALSE, fig.cap = "Dot-whisker plots visualize the coefficients and their confidence interval.", fig.height = 2.5}
+
+#Package preload
+  pacman::p_load(dotwhisker, broom, dplyr)
+  
+  m1_df <- tidy(mod_diff) %>% filter(term != "(Intercept)")
+  m1_df$term <- paste("Month ", 2:12)
+  
+  dwplot(m1_df) + geom_vline(xintercept = 0, colour = "grey60", linetype = 2) +  
+    theme(legend.position = "none") 
+
+
+
+```
+
+
+*__Mechanics of a forecast__*. Time series models can also be used to forecast the future price of housing. While seasonal dummies are easy to interpret, forecasting requires some data gymnastics.^[There are simple functions for estimating and producing forecasts, but we have chosen to show the underlying process to give a look inside the seemingly black box.] The ingredients for constructing a seasonal dummy forecast are a *training* data set that is used to estimate a model as well as an out-of-sample test data set to apply the model. 
+
+First, we construct the out-of-sample set for the next 12 months (time periods 118 to 129) that contains the same variable names and data types as were used to estimate the regression. We add these 12 new periods to an abridged version of the `uk` data frame.
+
+
+```{r}
+#Construct a forecast set
+  temp <- data.frame(time.index = 118:129, 
+                     month = 1:12,
+                     avg.price = NA,
+                     diff.series = NA)
+
+#Add the new periods to the future data
+  fcst <- rbind(uk[, c("time.index", "month", "avg.price", "diff.series")],
+               temp)
+```
+
+ Often times in policy, practitioners will focus on the expected value $\hat{y}_t$ (the forecast line) while ignoring the forecast uncertainty. In ignoring the uncertainty, decisions are made without considering the risks. In fact, for every step in the forecast horizon (periods into the future), the uncertainty grows as no new information is being integrated into the forecast. But, we can make a reasonable guess that the forecast can fall within a *prediction interval*. For this reason, data scientists include both the lower and upper bounds of the prediction interval for context and to help temper expectations. Using the `predict` function, we *score* the `fcst` data frame and extract the forecast and its 95% prediction interval, then add these columns to the `fcst` data frame.
+
+```{r}
+#Forecast the first difference
+  fcst <- cbind(fcst, 
+                predict(mod_diff, fcst, interval = "prediction"))
+```
+
+The forecast on growth $\hat{y}_t'$ needs to be converted into an estimate of the HPI *level*. We cannot simply add the monthly growths, but instead need to "grow" the forecast ($\hat{y}_t'$) from a known price level ($y_{t-1}$). To do this, the price level for the first out-of-sample period ($t=118$) can be obtained by adding the $y_{t-1} + \hat{y}_t'$, or taking the sum of the known price level in $t=117$ and the forecasted growth for $t=118$. For all subsequent periods, we build the forecast off of the forecasted level in the prior period: 
+
+$$\hat{y}_{t} =
+    \begin{cases}
+       y_{t-1} + \hat{y}_t' & \text{ if  } t = 118\\
+       \hat{y}_{t-1} + \hat{y}_t'  & \text{ if  } t > 118
+    \end{cases}$$
+    
+Implementing this calculation involves simple algebra and a for loop. 
+
+```{r}
+#Create yhats
+  fcst$yhat.level <- fcst$yhat.lower <- fcst$yhat.upper <-  NA
+
+#Set levels for t = -1
+  fcst$yhat.level[117] <- fcst$yhat.lower[117] <- fcst$yhat.upper[117] <- fcst$avg.price[117]
+  
+#Recursively add the first difference forecast to the prior period's level
+  for(i in 118:nrow(fcst)){
+    fcst$yhat.level[i] <- fcst$yhat.level[i-1] + fcst$fit[i] 
+    fcst$yhat.lower[i] <- fcst$yhat.lower[i-1] + fcst$lwr[i] 
+    fcst$yhat.upper[i] <- fcst$yhat.upper[i-1] + fcst$upr[i] 
+  }
+```
+
+In Figure \@ref(fig:fcst7), the price forecast (red) is plotted along with the prediction interval (light red). By month 129 (September 2020), the price level is expected to exceed \£240,000 with a prediction interval between \£221,310 and \£261,417. Notice that the forecast line extends the prevailing trend and retains the seasonal pattern.  While it looks promising and plausible, keep in mind that the seasonal dummy forecast is deterministic -- it is an extrapolation that assumes that trend and seasonality will follow a rigid, predictable pattern. The prediction intervals expand with the forecast horizon, serving as a reminder the uncertainty grows in the absense of data. 
+
+
+```{r, fcst7,echo = FALSE, warning=FALSE, message=FALSE ,fig.cap = "12-month forecast for HPI (red) and historical series (grey).", fig.height = 2.5}
+  ggplot(fcst) + 
+    geom_line(aes(x = time.index, y = avg.price), colour = "grey") + 
+  geom_ribbon(aes(x = time.index, ymin = yhat.lower, ymax = yhat.upper + 1), fill = "red", alpha = 0.3) + 
+    geom_line(aes(x = time.index, y = yhat.level), colour = "red", linetype = "dashed") + 
+    
+    ylab("Average price (Pound Sterling)") + xlab("Time Index") 
+```
+
+

@@ -1,0 +1,197 @@
+---
+title: 'DIY: Finding topics of Presidential speeches '
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 13*
+ 
+
+
+Sorting through tens of thousands of paragraphs of text for the right nugget of information is time-consuming and expensive. Placing attention in the wrong part of a corpus can mean the difference between finding useful information and lost time. Topic modeling can summarize the gist of documents and facilitate more effective search, doing so on large corpuses of information. In this DIY, we illustrate how topic modeling can bring structure to an expansive set of text using the STM method using the `stm` package.^[While LDA is the most common topic modeling in use, STM is arguably flexible, intuitive, and more extensible.]  Our objective is to train a topic model, identify topics, surface quotes that provide a flavor for the topic, then recommend similar paragraphs for review.
+
+*__Load__*. Our corpus is a collection of State of the Union (SOTU) speeches and letters delivered by 42 presidents.^[As of 2019, the only presidents who did not deliver SOTU addresses or letters were James A. Garfield and William Henry Harrison.] The text was scraped from `WikiSource.org` and has been structured to include: 
+
+- Basic identifiers such as an `id` for each SOTU, the title of the SOTU (e.g. Sixth State of the Union Address), the `year` of the address, a `paragraph` number, the `president`, and `link` to the source;
+- The `text` storing each paragraph as a separate line;^[Minor adjustments were made to minimize errors. These adjustments can be seen in the data processing scripts on Github.]
+- An average sentiment score for each paragraph calculated using the Bing Lexicon
+
+Topics and word choice have evolved over the last two centuries. The problems faced by the Founding Fathers of the US are different than contemporary presidents. We limit our analysis to speeches delivered between 1960 and 2019, or $n = 6219$ paragraphs.
+
+```{r, message=FALSE, warning=FALSE, error=FALSE}
+#Load
+  pacman::p_load(stm, dplyr)
+
+#Read 1960 to 2019
+  sotu_text <- read.csv("data/sotu.csv", stringsAsFactors = FALSE)
+  sotu_text <- filter(sotu_text, year >= 1960)
+```
+
+
+*__Process data__*. The `stm` package simplifies the process with a pre-built processing function.^[For more advanced DFM processing, consider using the processes illustrated in this chapter using `tidytext` package or the `quanteda` package.] The only user inputs required for processing are custom stop words and metadata. While a TF-IDF calculation can expose common stop words, a pure statistical calculation may be too aggressive.  We instead choose to define a set that are known favorites of US presidents, defined in the `stop_custom` vector.
+
+```{r, message=FALSE, warning=FALSE, error=FALSE}
+  stop_custom <- c("applause", "thank", "you", "goodnight",
+                   "youre", "im", "weve", "ive", "us", "that",
+                   "know", "back", "one", "much", "can", "shall",
+                   "fellow", "people", "government", "get", "make", "agency", "department",
+                   "america", "united", "states", "american", "americans",
+                   "tonight", "ago", "now", "year", "years", "just", "new", 
+                   "must", "without", "said", "will")
+```
+
+The `textProcessor` function in `stm` constructs a DFM from a vector of `documents` (`text` field in `sotu_text`). We make use of a STM's special ability to allow word choice to evolve *within* a topic depending on contextual factors as encoded in metadata about the document. We provide the function with a data frame of metadata on `sentiment` and the `year`. With the inputs provided to the function, `stm` removes common stop words, numbers, and punctuation; stems words; and converts text to lower case  (`lowercase`). In addition, custom stop words are provided (`customstopwords = stop_custom`) and non-alphanumeric characters that can cause unnecessary complications in the modeling process are also removed (`onlycharacter = TRUE`). 
+
+
+```{r, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
+  ingest <- textProcessor(documents = sotu_text$text, 
+                          metadata = sotu_text[, c("year","sentiment")], 
+                          onlycharacter = TRUE,
+                          customstopwords = stop_custom)
+```
+
+The SOTU corpus is further processed by sweeping rarely-occurring words. By reducing the unnecessary sparsity of a DFM, we not only can cut the time required for the topic model to converge but also mitigate noise that would otherwise be introduced into the results.
+
+```{r, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
+  sotu_prep <- prepDocuments(documents = ingest$documents, 
+                             vocab = ingest$vocab, 
+                             meta =  ingest$meta,
+                             lower.thresh = 2)
+```
+
+*__Model__*. With the data ready, we apply an `stm` model to the processed documents, vocabulary and metadata as stored in the `sotu_prep` object. With $n=6219$ paragraphs, there are likely a large number of topics. We arbitrarily choose $K=25$ as a starting point and a maximum of $I = 100$ iterations. Furthermore, an initial seed is set so the analysis can be replicated on other computers.
+
+
+```{r, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
+  sotu_stm <- stm(documents = sotu_prep$documents, 
+                 vocab = sotu_prep$vocab,
+                 data = sotu_prep$meta,
+                 K = 25,  seed = 314,
+                 max.em.its = 100)
+```
+
+
+
+*__Analyze__*. The resulting `stm` object stores the learned topics and their associated words. To examine the expected topic proportions, simply `plot` the `stm` object. The most common topic (#16), for example, appears to global security issues as characterized by "world", "peace", and "war". The second most common topic (#22) is budget and spending focused. Granted, the precise definition of these topics are approximations. If the analysis were re-run with a different *seed number*, we would likely obtain similar but not precisely identical topics -- this is one of challenges with unsupervised learning applied to a subjective area of study. 
+
+```{r, message=FALSE, warning=FALSE, error=FALSE, fig.cap = "Preview of topics sorted by expected topic proportions in SOTU  corpus."}
+  plot(sotu_stm, font = 1, text.cex = 0.8, main = NA)
+```
+
+Nonetheless, we can improve our interpretation of each topic by identifying paragraphs that have the highest probability of containing the topic of interest. This requires sorting the $\theta$ vector  the topic $k$ of interest in descending order, then retrieving the corresponding raw text for the highest probability. The `findThoughts` function simplifies the retrieval of example text that illustrates the concepts captured in a topic. When we focus on education (Topic #3), the clearest arguments come from  George W. Bush and Barack Obama. When we turn our attention to military (Topic #18), we find details on military plans presented by John F. Kennedy and Jimmy Carter. 
+
+```{r}
+  thoughts <- findThoughts(model = sotu_stm, 
+               texts = sotu_text$text,
+               n = 2, 
+               topics = c(3,18))
+```
+```{r, echo = FALSE}
+#Construct frame
+  thought_examples <- data.frame(Topic = c(3,3,18,18),
+                                 President = sotu_text$president[unlist(thoughts$index)],
+                                 Text = paste0(substr(unlist(thoughts$docs), 1, 150), "..."))
+
+#Construct table
+  pander::pander(thought_examples, split.cell = 80, split.table = Inf, 
+               caption = "(\\#tab:exampleparas) First 150 characters of representative thoughts.", 
+               justify = "left")
+  
+```
+
+The probabilistic nature of topics means that some topics overlap with one another -- some are more distinguishable than others. Using the topic probabilities $\Theta$, it is a fairly straight forward procedure to calculate a topic correlation matrix using a Pearson's correlation `cor`. Visualizing these relationships can prove challenging, however. 
+
+A network graph uses space and negative space to show the interconnectedness and closeness between entities (referred to as nodes) based on linkages (edges). Whereas each topic can be treated as a node, the cells of a correlation matrix can indicate the strength of relationship between two topics. All topics are likely connected to one another, but even a weak linkage can introduce unwanted noise. Thus, the topic correlation matrix can be simplified by treating correlations below a thresholds as if no relationship exists. Below, we rely on the `topicCorr` function (`stm` package) to processes the topic correlations, simplify the matrix by setting a correlation `cutoff = 0.02`, then format the data to be rendered as a network graph using `plot`. 
+
+In Figure \@ref(fig:networkgraph), we find that one of the 25 topics is disconnected from all other topics. Meanwhile, the remaining 23 topics are correlated to varying degrees -- this is the magic of a mixture model that allows topics to be related but with different foci.  To illustrate nuances between topics, we render five topics (#3, #6, #11, #16, and #18) using the word `cloud` function. Topics 3 and 6 are network neighbors that have a common focus on families and children; However, the former focuses more on education issues whereas the latter on finances.  Topics 16 and 18 both relate to national security, but the former stresses peace and liberties while the latter focuses on military and defense. 
+
+
+
+```{r, networkgraph, message=FALSE, warning=FALSE, error=FALSE, fig.cap = "Network graphs show how two or more topics are correlated. When plot a few topics as word clouds, it becomes clear that some topics are more similar than others and these similarities are clearly represented by the proximity of topic nodes.", fig.height = 4.5}
+
+#Topic correlations
+  sotu_cor <- topicCorr(sotu_stm, 
+                        cutoff = 0.02)
+
+#Set a 2 x 3 grid
+  par(mfrow = c(2,3), mar = rep(2,4))
+  
+  #Plot network diagram of topics
+  plot(sotu_cor,  vlabels = 1:25,
+       vertex.color = "lightblue",  vertex.size = 25)
+  text(0.5, 1.5, "Topic Correlation",  cex = 1.2)
+  
+  #Plot word clouds for five topics
+  for(i in c(3, 6, 11, 16, 18)){
+      cloud(sotu_stm, topic = i,  max.words = 15, col = "slategrey")
+      text(0.5, 1, paste0("Topic ", i), cex = 1.2)
+  }
+
+
+  
+```
+
+
+*__Searching for text__*.  With topic proportions $\theta$, we can more accurately correlate documents with one another. A document's topic proportions are a set of coordinates that summarize its complexities and allow for it to be related to any other document.  Suppose a specific paragraph from President Bill Clinton's 1997 speech captures a concept that you would like to further explore in presidential speeches:
+
+>> *We must continue, step by step, to give more families access to affordable, quality health care. Forty million Americans still lack health insurance. Ten million children still lack health insurance; 80 percent of them have working parents who pay taxes. That is wrong. My balanced budget will extend health coverage to up to 5 million of those children. Since nearly half of all children who lose their insurance do so because their parents lose or change a job, my budget will also ensure that people who temporarily lose their jobs can still afford to keep their health insurance. No child should be without a doctor just because a parent is without a job.*  
+
+This is paragraph #4121 of $n=6219$ paragraphs in the corpus, focusing on affordable health care and the risk of losing coverage.  Using the topic probabilities (`sotu_stm$theta`), we calculate the `cosine` similarity (`coop` package) to estimate how every paragraph is related to all other paragraphs. This similarity matrix can feed a function to recommend relevant paragraphs conditional on a specific document ($sim(\theta|d)$), requiring a vector of `text`, a cosine similarity matrix (`sim`), the paragraph number (`item_index`), and the number of records to be returned (`n`).   
+
+```{r, eval = F}
+#Calculate Cosine Similarity
+  pacman::p_load(coop)
+  sim_mat <- cosine(t(sotu_stm$theta))
+  
+#Function to return top N most similar records
+  simRecs <- function(text, sim, item_index, n){
+   
+    #Retrieve similar text, removing the target document from consideration
+      top_rec_index <- which(rank(-sim[,item_index]) <= n + 1)
+      top_rec_index <- top_rec_index[top_rec_index != item_index]
+      top_recs <- text[top_rec_index]
+      
+    #Retrieve top scores
+      top_scores <- sim[top_rec_index, item_index ]
+      
+    #Return results
+      results <- data.frame(top_scores, top_recs)
+      return(results)
+  }
+  
+#Return similar documents conditional on paragraph 4121
+  simRecs(text = sotu_text$text, 
+          sim = sim_mat, 
+          item_index = 4121, 
+          n = 5)
+```
+
+Table \@ref(tab:recparas) presents the three most related paragraphs to #4121. The results are striking: they capture a broader topic than just health care -- financial well-being and stability.  The topic also seems to be one that is always a priority from one president to the next. In fact, the example text surfaces quotes from Presidents Lyndon Johnson and John F. Kennedy, helping to draw links over time.  This approach does not always return perfect results, but it is far more efficient than manual annotation and expands one's reach to beyond what is possible by analyst.
+
+```{r, echo = FALSE}
+##Calculate Cosine Similarity Matrix
+  pacman::p_load(coop)
+  para_index <- 4121
+  sim_mat <- cosine(t(sotu_stm$theta))
+
+#Get Top Three, drop first which is the paragraph 
+  top3 <- as.vector(which(rank(-sim_mat[para_index,]) <= 4))
+  top3 <- top3[top3 != para_index]
+  
+#Construct frame
+  thought_examples <- data.frame(Score = round(sim_mat[top3, para_index],4), 
+                                 Year = sotu_text[top3, "year"],
+                                 President = sotu_text[top3, "president"],
+                                 Text = sotu_text[top3,"text"])
+  thought_examples <- thought_examples[order(-thought_examples$Score), ]
+  row.names(thought_examples) <- NULL
+#Construct table
+  pander::pander(thought_examples, split.cell = 80, split.table = Inf, 
+               caption = "(\\#tab:recparas) Top 3 most similar paragraphs relative to Paragraph 5024.",
+               justify = "left")
+  
+```

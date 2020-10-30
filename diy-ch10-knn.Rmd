@@ -1,0 +1,204 @@
+---
+title: 'DIY:  Predicting the extent of damage from a storm'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 10*
+  
+
+
+Perhaps one of the most important but under-appreciated responsibilities of city government is to take care of its trees. One might not even notice that trees are well-cared for, but they do make their presence known from time to time. When a branch or entire tree falls, it can inflict property damage, bodily harm and traffic disruptions. In some cities, like NYC, a resident can call the City's services hotline known as 311 to request the tree be removed, then the Parks Department is dispatched. During large storms, the local government's role is even more important, especially after Hurricane Sandy left its mark on New York City's urban landscape. 
+
+
+Let's suppose you are a city official tasked with triaging tree removal after a hurricane. The problem after storms is the chaos -- there's only partial information available on the state of affairs. Some parts of a city have phone access and can still make requests for help, whether it is for downed trees or other localized problems. Other areas may not be as lucky. Thus, the disposition of most areas is largely unknown, which might cause responders to only addressed known problem while overlooking the most heavily affected areas. In short, responders need to know *where* and *what* the problems are but not *how* or *why* things turned out the way they did -- at least not during times of crisis. In this DIY, we rely on $k$NN to impute a fuller picture of downed trees after Hurricane Sandy. Using 311 data available from the day Hurricane Sandy hit NYC, we impute downed tree status for large portions of the city, comparing the predictions with what is learned in the seven days following the storm. By filling in information gaps, emergency responders can make more informed aid allocations. 
+
+
+__Prepping the data__. Rather than responding to individual calls for help when impacts are widespread, it may be more effective to allocate resources by local areas such as grids. For this DIY, we have pre-processed NYC 311 call records into a grid containing $1000ft \times 1000 ft$ cells -- $n=7513$ cells in all. The data contain only a few variables including an `id`, a county label `boro`, geographic coordinates of the grid centroid^[If latitude and longitude were recorded in decimal degrees, the value of one degree is dependent on where one is on the globe. When working in local regions, *state plane feet* allows each unit of a coordinate to be equal within the region.], and a set of binary variables indicating if at least one downed tree was reported on the day of Hurricane Sandy (`tree.sandy`) or in the following seven days (`tree.next7`). The two binary variables were developed under the assumption that residents of a neighborhood would report downed trees if they were spotted. If a call were made, then we could flag a neighborhood as one that experienced tree troubles. Alternatively, if complaints from a neighborhood are devoid of tree-related issues, we can assume that the area was unaffected. 
+ 
+For simplicity, let's focus on the two largest and populous boroughs (`boro`) that share the same land mass, Brooklyn (BK) and Queens (QN), that comprise 59.6% of the city or $n = 4477$ grid cells. We only have 311 information for 43.5% of grid cells at the time of the hurricane, leaving the tree status unknown for 56.5% of the region. On the one hand, we can wait and see what happened, but it will likely take some time to gather complete information. Alternatively, we could apply a simple imputation model to approximate the current state of affairs so interim decisions can be made while more information is gathered.
+
+
+```{r, message = FALSE, warning = FALSE, fig.height = 3}
+#Load data
+ nyc <- read.csv("data/sandy_trees.csv")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#Extract Queens and Brooklyn
+ pacman::p_load(dplyr)
+ nyc <- filter(nyc, boro %in% c("BK", "QN"))
+```
+
+__Train__. Our training strategy assumes that the pattern of downed trees in the data available immediately after the storm (the target variable `tree.sandy`) is representative of what will be seen in the rest of Brooklyn and Queens over the next seven days after the storm. A quick tabulation shows that 79.7% ($n=1550$) of grid cells in the training set have at least one downed tree reported -- evidence that the storm had widespread impacts. Through cross-validation, we can find the optimal hyperparameters, then score the test set (`testing`) which contains all grid cells in both Brooklyn and Queens. Providing all possible grid cells in the form of a test set is a quick way of asking the $k$NN to produce a complete picture of what it can glean from the data.
+
+```{r}
+#Extract the training and test samples
+ training <- subset(nyc, !is.na(tree.sandy), 
+         select = c("ycoord", "xcoord", "tree.sandy"))
+ testing <- subset(nyc, 
+         select = c("ycoord", "xcoord", "tree.next7"))
+ 
+#Split out
+ table(training$tree.sandy)
+```
+
+
+With the data ready, we apply $k$NN to predict downed trees. While it is generally good practice to write algorithms from scratch at least once to fully understand its underpinnings, it is hard to ignore the efficiency gains made possible by the `caret` package. Here, we rely on `caret` to interface with the `kknn` package, which has the ability to handle both classification and regression problems as well as conduct grid searching to identify the optimal combination of kernel and number of nearest neighbors $K$. 
+ 
+
+```{r}
+ pacman::p_load(caret, kknn)
+```
+ 
+*Tuning models*. Within `caret`, we specify the algorithm using the `method` argument in the `train` function (`method = "kknn"`). We also have the option to provide `caret` with a complete list of tuning scenarios for us to test, requiring some knowledge of how the `kknn` package was implemented. Below are three key parameters that should be specified:
+
+> - `kmax` is the maximum number of neighbors to be tested;
+> - `kernel` is a string vector indicating the type of distance weighting (e.g. _rectangular_ is unweighted, _biweight_ places more weight towards closer observations, _gaussian_ imposes a normal distribution on distance, _inv_ is inverse distance).
+> - `distance` is a numerical value indicating the type of Minkowski distance. (e.g. 1 = binary, 2 = Euclidean).
+
+With three parameters, we the number of scenarios that can be tested could easily balloon. For example, the following parameter set would require comparing 200 scenarios:
+
+- $k=1$ up to $k=100$ neighbors;
+- Euclidean distance; and 
+- testing both rectangular (simple average) or inverse distance kernels
+
+Normally, this would require writing a set of loops to work through each scenario combination. But `caret` allows us to simplify the process by using the `expand.grid` function to create a data frame that contains every combination of these parameters:
+
+
+```{r}
+ scenarios <- expand.grid(kmax = 100, 
+              distance = 1,
+              kernel = c("rectangular", "inv"))
+```
+
+For a first pass, we conduct 10-folds cross validation using the scenarios constructed above. The `train` command does much of the hard work, running the $k$NN algorithm 2000 times (10 cross-validation models for each $k$ and *kernel* combination), then identifies the optimal parameters that minimize classification error. The results are stored in the `fit_knn` object.
+
+
+```{r, message = FALSE, warning = FALSE, results='hide'}
+#Set seed for replicability, run with 10-folds cross validation
+ set.seed(100)
+ val_control <- trainControl(method = "cv", number = 10)
+
+#Train model
+ fit_knn <- train(factor(tree.sandy) ~ ., 
+         data = training, 
+         preProcess = c("center","scale"), 
+         trControl = val_control, 
+         method = "kknn", 
+         tuneGrid = scenarios)
+```
+
+ 
+__Evaluate performance__. We can extract the optimized tuning parameters by calling `summary(fit_knn)`, which settles on a simple *rectangular* kernel with $k=20$ neighbors that achieves a misclassification rate of under just 20%. *Is this sufficient for deployment?* 
+
+```{r, message=FALSE, warning = FALSE}
+#Score, predict probabilities
+  testing$prob <- predict(fit_knn, testing, type = "prob")[,2]
+  testing$yhat <- ifelse(testing$prob >= 0.5, 1, 0)
+  
+#Fill NAs in test set actuals
+  testing$tree.next7[is.na(testing$tree.next7)] <- 0
+```
+
+
+A closer visual inspection of the predictions in Figure \@ref(fig:knnpred) shows that the $k$NNs predicted probabilities approximate the pattern of downed tree that are reported over the next seven days after the storm. The algorithm appears to be relatively effective in detecting both the unaffected (blue) and affected (orange) with a blue-orange gradient where the evidence is less clear. These probabilities can come in handy when *prioritizing* aid -- send help to where you are more certain it is needed.
+
+In fact, if emergency responders prioritized visits to higher probability areas, we would likely achieve high hit rates (e.g. finding downed trees when a visit is conducted) -- nearly 80% at its peak, then gradually declining with lower probabilities. Thus, while probabilities will not perfectly predict which areas have been impacted, they would allow responders to focus on areas with more pressing needs first.
+
+```{r, knnpred, message=FALSE, warning = FALSE, echo = FALSE, fig.height = 2.5, fig.width = 7, fig.cap = "Comparison of actual and predicted areas with reported downed trees. Red indicates at least one tree was reported in a given 1000 x 1000 square-mile area"}
+
+#Produce impact maps
+ test_tube <- testing[complete.cases(testing$tree.next7), ]
+
+ a1 <- ggplot(training, aes(x = xcoord, y = ycoord)) + 
+    geom_point(colour = rgb(training$tree.sandy , 0.6, 1-training$tree.sandy, 1),
+          size = 0.1) + 
+    xlab("") + ylab("") + 
+    ggtitle("(A) Calls during the storm") + 
+    theme_bw() +
+    theme(text = element_text(size=9), 
+       plot.title = element_text(size = 9),
+       panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(),
+       axis.text.y=element_blank(),
+       axis.text.x=element_blank(),
+       axis.ticks.x=element_blank(),
+       axis.ticks.y=element_blank())
+  
+  
+ b1 <- ggplot(testing, aes(x = xcoord, y = ycoord)) + 
+  geom_point(colour = rgb(testing$prob , 0.6, 1-testing$prob, 1),
+          size = 0.1) + 
+  xlab("") + ylab("") + 
+  ggtitle("(B) Predicted probabilities") + 
+  theme_bw() +
+  theme(text = element_text(size=9), 
+     plot.title = element_text(size = 9),
+     panel.grid.major = element_blank(), 
+     panel.grid.minor = element_blank(),
+     axis.text.y=element_blank(),
+     axis.text.x=element_blank(),
+     axis.ticks.x=element_blank(),
+     axis.ticks.y=element_blank())
+  
+ c1 <- ggplot(testing, aes(x = xcoord, y = ycoord)) + 
+  geom_point(colour = rgb(test_tube$tree.next7 , 0.6, 1-test_tube$tree.next7, 1),
+          size = 0.1) + 
+  xlab("") + ylab("") + 
+  ggtitle("(C) Actual next 7 days") + 
+  theme_bw() +
+  theme(text = element_text(size=9), 
+     plot.title = element_text(size = 9),
+     panel.grid.major = element_blank(), 
+     panel.grid.minor = element_blank(),
+     axis.text.y=element_blank(),
+     axis.text.x=element_blank(),
+     axis.ticks.x=element_blank(),
+     axis.ticks.y=element_blank())
+  
+ 
+#Calculate hit rates
+ pacman::p_load(dplyr)
+ 
+ #Bin the test probabilities to nearest 5%
+  testing$score_bucket <- round(testing$prob / 0.05) * 0.05
+ #Calculate hit rates
+  rates <- testing %>% 
+       group_by(score_bucket) %>%
+       summarise(hit.rate = 100*round(mean(tree.next7),2),
+            cell.n = n(),
+            cell.target = sum(tree.next7))
+ 
+  #Load
+  pacman::p_load(ggplot2, gridExtra)
+  
+ #Plot 
+  d1 <- ggplot(data = rates, aes(x = score_bucket, y = hit.rate)) + 
+       geom_area(colour ="#8FAADC", fill = "#8FAADC") + 
+     xlab("Predicted Probability") + ylab("Percent with downed trees") + 
+     ggtitle("(4) Hit rate") + 
+     theme_bw() + 
+     theme(text = element_text(size=9), 
+        plot.title = element_text(size = 9),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+  
+  e1 <-  ggplot(data = rates, aes(x = score_bucket, y = cell.target)) + 
+       geom_area(colour = "#8FAADC", fill = "#8FAADC") + 
+      xlab("Predicted Probability") + ylab("Number of true cases") + 
+      ggtitle("(5) Number of affected grid cells") + 
+      theme_bw() + 
+      theme(text = element_text(size=9), 
+         plot.title = element_text(size = 9),
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank()) 
+ 
+ grid.arrange(a1, b1, c1, ncol = 3)
+
+```
+

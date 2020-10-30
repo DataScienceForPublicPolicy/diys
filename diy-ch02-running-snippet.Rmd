@@ -1,0 +1,36 @@
+---
+title: 'DIY: Running your first code snippet'
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 2*
+
+There is no better way of learning than doing. Throughout this text, we present *Do It Yourself* (DIY) sections that help you understand how data science "works" and how it fits into the public and social sectors.
+
+In this first DIY,  let's demystify the idea of *running code*.  When writing code, it is important to make sure it is easily understood  -- your assumptions and logic are clear and produce the intended result. This ensures that a program that becomes relied upon in a policy process can be used by *anyone*. The code snippet below involves two steps. The first step is to simulate a random normal distribution with $n = 10000$ observations, storing the values in `x`, then we plot that result as a histogram with 100 light blue bins. The lines that begin with a *hash* contain comments that describe what will happen in the lines that follow. Copy the code from "`#Simulate 10,000...`" through "`hist(x...`"" and paste this into a new script in `RStudio` or press the green play button in the code chunk below.
+
+
+```{r, eval = F}
+#Simulate 10,000 values drawn from a normal distribution
+  x <- rnorm(10000)
+
+#Plot histogram graph
+  hist(x, breaks = 100, col = "lightblue")
+```
+
+
+You can run this code snippet using one of two options:
+
+1. *The `Run` button*: Highlight all lines, then click on the `Run` button at the top of the script editor. 
+2. *Hot keys*: Highlight all lines (`Control + A`), then press `Control + Enter`. 
+
+Both options send the highlighted code to the console where it is interpreted (run), but the Hot Key approach is far faster removing the need for the mouse. The result should look similar to the histogram in Figure \@ref(fig:firsthist).^[The histogram will look similar but not exactly the same as the $n=10000$ observations are randomly drawn. In subsequent chapters, we show a simple way to ensure that the same simulation can be replicated on any computer.] Granted, it is a simple example, but the tip of a massive iceberg of data science possibilities.
+
+```{r, firsthist, fig.height = 3, fig.cap = "Histogram for a simulated normal distribution."}
+  x <- rnorm(10000)
+  hist(x, breaks = 100, col = "lightblue") 
+```

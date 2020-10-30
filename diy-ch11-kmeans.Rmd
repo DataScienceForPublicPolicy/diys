@@ -1,0 +1,182 @@
+---
+title: 'DIY: Clustering for economic development'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 11*
+  
+
+Economic development corporations and chambers of commerce support local communities by attracting jobs and investment. Given the need for more jobs around the country grows, economic development initiatives are fierce affairs, sometimes pitting one community against another in bidding wars over tax benefits. In 2018, Amazon.com announced new secondary headquarters in New York City and Arlington, VA after an exhaustive 20 city search [@amazonsite].^[This later was revised to only Arlington, VA due to local politics in New York.] The global manufacturer Foxxconn announced it will bring high tech manufacturing to Racine, WS [@jsart]. And a long-standing "border war" between Kansas City, MO and Kansas City, KS has seen a number of high profile companies like AMC Theaters move headquarters a mere miles, chasing economic benefits [@economistborder].
+
+Beyond the bidding war spectacle, there are other issues that factor into these siting decisions. Also, not all companies are as high profile as the ones described above, but are nonetheless important due to their contributions to the economy. For one thing, the prospective host region of new jobs should have the right economic conditions to sustain and foster the new opportunity. Suppose a tech executive in Santa Clara or Alameda in the Bay Area in California wanted to find another county with similar socioeconomic conditions. *Based on available data, how would one find a list of comparables?* The same question could be asked in reverse for economic developers: *what are other areas that are in direct competition?*
+
+An analysis could first consider which observable characteristics of a city or county are selling points for prospective businesses. *Is it the size of the labor force? Is it the relative size of the target industry? Or perhaps it is related to education of the labor force or the local cost of employment?* In any of these cases, publicly available economic data can be clustered using the $k$-means technique. Below, we illustrate a simple process of finding clusters of comparable economic activity, focusing on finding clusters associated with  tech industries.^[For simplicity, we define online tech industries using NAICS codes 5182, 5112, 5179, 5415, 5417, and 454111 although we recognize this may exclude sub-industries that are rapidly growing in importance in tech.]
+
+__*Set up*__. We start by loading the `cluster` library that has utilities for evaluating clustering results, then import a county-level data set that contains information for over 3,100 US counties.
+
+
+```{r, message = FALSE, warning=FALSE}
+#Load library
+  pacman::p_load(cluster)
+
+#Load data
+  load("data/county_compare.Rda")
+```
+
+The underlying data is constructed from a variety of U.S. Census Bureau databases, in particular the American Community Survey, County Business Patterns, and the Small Area Income & Poverty Estimates.
+
+- `fips`: Federal Information Processing System code that assigns a unique ID to each county.
+- `state` and `name`: The US state abbreviations and the name of the county.
+- `all.emp`: total employment [@cbpdata].
+- `pct.tech`: percent of the employed population in tech industry [@cbpdata].
+- `est`: percent of company establishments in that industry [@cbpdata].
+- `pov`: the poverty rate [@saipe].
+- `inc`: median household income [@saipe].
+- `ba`: percent that is college educated [@saipe].
+
+
+__*Clustering*__. Before we apply $k$-means, the data should be mean-centered and standardized so that no single input has disproportionate influence on clustering (the equal weights assumption). The `scale` function is applied to the numeric fields (column 4 onward), then the output is assigned to a new data frame `inputs`.
+
+
+
+```{r, message = FALSE, warning=FALSE}
+  inputs <- scale(cty[,5:ncol(cty)])
+```
+
+
+
+Let's get comfortable with the clustering process. As a dry run, we apply the `kmeans` function to `inputs`, specifying $k = 5$ for five clusters, and setting the seed to a constant value so the analysis is replicable. The resulting object `cl` contains diagnostics about the clustering process, but also the coordinates of the centroids and the cluster assignment for each county (`cl$cluster`).  Digging into the `cl` object, we can calculate how many counties fall into each of the five clusters by tabulating `cl$cluster` as well as retrieve the loss metric -- the total cluster variance (`cl$tot.withinss`). *Is this a good result? Why choose five clusters? Why not two or 50?*
+  
+
+```{r, message = FALSE, warning=FALSE, results='hide'}
+#Set seed
+  set.seed(123)
+
+#Apply clustering
+  cl <- kmeans(inputs, centers = 5)
+  
+#Tabulate number of counties per cluster
+  table(cl$cluster)
+  
+#Retrieve the Total Within Sum of Squares (Total Cluster Variance)
+  cl$tot.withinss
+```
+
+
+To ensure clusters are identified with some rigor, we will search for the optimal value of $k$ by comparing mean silhouette widths as calculated using the `silhouette` function in the `cluster` library. `silhouette`  requires two inputs: the cluster assignment and a dissimilarity matrix. The former is an output of `kmeans` whereas the latter is a distance matrix between all observations that can be calculated by applying the `dist` function on the `input` variables. 
+
+The `silhouette` function calculates the *silhouette width* for each observation. To make comparisons between each value of $k$, we instead need the mean silhouette width. Below, we illustrate how this calculation should flow: (1) calculate the dissimilarity matrix, (2) calculate the silhouette and store to object `sil`, (3) calculate the mean of silhouette values contained in the third column of `sil`. 
+
+
+```{r, message = FALSE, warning=FALSE, results='hide'}
+#Calculate dissimilarity matrix
+  dis <- dist(inputs)
+
+#Calculate silhouette widths
+  sil <- silhouette(cl$cluster, dis)
+
+#Calculate mean silhouette width
+  mean(sil[,3])
+```
+
+
+__*Optimizing k*__. To test dozens of values of $k$, it would be prudent to wrap the clustering and silhouette procedure into a cohesive function. Not only would this keep the code concise and tidy, but it allows the optimization procedure to be applied and re-applied to other problems. We combine the $k$-means and silhouette functions into a single function `km`. The function requires input variables `x` and the number of clusters `k`. In addition, it requires a dissimilarity matrix `d`. As `d` is the same for all scenarios of $k$, we only need to calculate the dissimilarity matrix once and apply the same object to each iteration to save compute time.
+
+
+```{r, message = FALSE, warning=FALSE}
+km <- function(x, k, d){
+  #
+  # Calculate mean silhouette for a value of k
+  #
+  # Args:
+  #   x = data frame of input variables
+  #   k = number of clusters
+  #   d = a dissimilarity matrix derived from x
+  
+  cl <- kmeans(x, centers = k)
+  sil <- cluster::silhouette(cl$cluster, d)
+  
+  #Return result
+  return(data.frame(k = k, sil = mean(sil[,3])))
+}
+```
+
+
+
+With `km` developed, let's test values of $k \in \{2,30\}$, storing the mean silhouette for each $k$ in the placeholder data frame `opt`. Notice how the code is relatively compact and itself could be wrapped into an optimization function as well.
+
+
+
+```{r, message = FALSE, warning=FALSE}
+#Placeholder
+  opt <- data.frame()
+
+#Loop through scenarios
+  for(k in 2:30){
+    opt <- rbind(opt, km(inputs, k, dis))
+  }
+```
+
+
+
+By plotting the contents of `opt`, we reveal the shape of the silhouette curve for all tested values of $k$ (see Figure \@ref(fig:clusterpatterns). Ideally, the curve will have a global maximum and is downward slowing as $k$ increases. The global maximum is $k=2$, indicating that the US' can be divided into two clusters that have distinctive levels of tech activity, one with $n = 526$ and the other with $n = 2611$. 
+
+*Are these clusters meaningful?* Suppose one wanted to create a Buzzfeed list of the most educated counties in the US. It is as easy as taking the proportion of people with a college degree in each county, then sorting from most to least. What if the list were expanded to the most educated and populous? Or if income were added in addition? Clustering can be treated as a way to bucket observations with similar values together, effectively producing a rank.  This is evident in Figure \@ref(fig:clusterpatterns). 
+
+The scatter plots suggest that larger employment centers tend to also have higher concentration of tech employment and greater incomes as well -- not surprising given the trend towards urbanization. These resource rich areas tend to bubble to the across all measures. Granted, these results are not causal, but are certainly suggestive.  In effect, the $k$-means algorithm provided an efficient strategy to partition better resourced communities from ones that are less well-off. 
+
+
+```{r, clusterpatterns, message = FALSE, warning=FALSE, echo = FALSE, fig.cap = "(A) Grid search for optimal k with respect to mean silhouette width, (B) and (C) Clusters for select input variables bivariate plots - scaled by total employment.", fig.height = 3}
+
+#And breaks the country into one small partition and one large partition
+set.seed(123)
+cl <- kmeans(inputs, centers = 2)
+
+#Compare
+cty1 <- cbind(clusters = cl$cluster, cty)
+
+#4 square
+par(mfrow = c(1,3))
+
+#Mean Silhouette
+plot(opt, col = rgb(0,0,1,0.5), 
+     pch = 16, 
+     ylab = "Mean Silhouette Width",
+     xlab = "k", bty = "n", main ="(A) Optimizing k",
+     font.main = 1, cex.main = 1)
+lines(opt, col = "grey")
+
+#Plot 1
+plot(log(cty1$ba),log(cty1$pct.tech), 
+     ylab = "log(% Emp. in Tech)", 
+     xlab = "log(% with BA)",
+     main = "(B) Tech Employment and Education", 
+     cex.main = 1,
+     col = scales::alpha(cty1$clusters+2, 0.4),
+     cex = 0.3 + 3*cty1$all.emp/max(cty1$all.emp),
+     pch = 16,  bty = "n",
+     font.main = 1)
+
+#Plot2
+plot(log(cty1$inc),log(cty1$pct.tech), 
+     ylab = "log(% Emp. in Tech)", 
+     xlab = "log(Median Income)",
+     main = "(C) Tech Employment and Income", 
+     col = scales::alpha(cty1$clusters+2, 0.4),
+     cex = 0.3 + 3*cty1$all.emp/max(cty1$all.emp),
+     pch = 16, bty = "n",
+     font.main = 1, cex.main = 1)
+
+```
+
+__*Making use of clusters*__. How should these results be used? It depends on the audience. An economic development authority does not need to compete with every competing county -- it should focus on comparables. By clustering all counties on their observable characteristics, economic developers can map their county to a pool of similar counties. If it can articulate which other counties are competitors in its market segment, then it can also craft offerings for prospective companies that distinguish itself from the rest.
+
+A tech company searching for the site of its future headquarters may not want to pay for being in the most expensive cities yet would want access to a reasonably sized, skilled tech labor force. $k$-means condenses the data of competitiveness into a simple list of where tech is concentrated. The smaller of the two clusters contains $n = 526$ counties, which is comprised of iconic high-tech areas such as San Francisco and Santa Clara in California as well as large cities such as New York City (New York City) and Seattle (King County, WA). The same cluster finds less expensive and less densely populated alternatives like Durham, NC and Arlington, VA -- both of which are growing centers of technical excellence. In essence, clustering can identify smart alternatives to inform the selection process. 
+
+Despite these promising use cases, keep in mind there are limitations. From an ethical perspective, cluster analysis based on the past performance of regions might be a self-fulfilling prophecy. Well-resourced areas will continue to draw more attention and resources, ignoring promising areas. Furthermore, clustering on past data does not provide any indication of future performance of counties. For $k$-means, in particular, the outputs are "flat" -- cluster labels are one dimensional and ignores the rich context that shows how some observations are more like some than others. Alternative methods might be more useful in capturing that context.  As we will see in the following section, hierarchical clustering is a step in that direction.
+

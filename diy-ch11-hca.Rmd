@@ -1,0 +1,166 @@
+---
+title: 'DIY: Clustering time series'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 11*
+  
+
+*How is the economy doing? Where should we focus our efforts?* 
+
+While these are vague questions, they are common questions that policy makers struggle with. The questions imply the need for a comparison of the economy against its historical performance in a time series -- a fairly straightforward problem. But when it is  expanded to the *where* dimension, we suddenly must incorporate a geographic component that will easily increase the complexity of the problem. A state-level analysis expands the number of time series to 50, whereas the county level analysis balloons to 3,100 time series.  The challenge when moving from a single time series to thousands of time series is the sheer amount of information that needs to be concisely summarized in an informative, relatable manner. But maybe every county is not a snowflake. Maybe each county can be viewed as part of an economic motif. Each county can be compared with all other counties using the qualities of its time series (e.g. seasonal cycles, increasing or declining trends, and irregularities), then counties that move similarly can be part of the same economic motif -- essentially identifying clusters. These clusters reduce the complexity of the data so that only a few distinct profiles can form the basis of a concise economic analysis.
+
+In this DIY, we illustrate how to apply hierarchical clustering to time series data to identify and articulate behavioral motifs. It is an idea that can be widely applied to economic data. Clustering can help policy makers understand that there is not just one type of economic growth -- it is heterogeneous and some regions may be more resilient than others. The approach can also be applied beyond economics to cyber security to identify common types of web traffic in order to monitor for unusual activity. Virtually any set of time series can benefit from clustering. 
+
+We rely on the Quarterly Census of Employment of Wages (QCEW), a quarterly data set of employment and wages that represents more than 95% of US jobs. Collected by the US Bureau of Labor Statistics, the data is one of the core data sources that tells the economic story of the United States, showing every level of economic activity from the county-level to the national top-line.^[The BLS does not consider QCEW to be a time series, but it contains useful information if treated as a time series.] While approximately 3,200 counties are published in the QCEW, we illustrate the clustering on a subset of data, namely mean quarterly employment for California's 58 counties.^[For ease of analysis, the authors have pre-processed the data. First, the data aggregate monthly records into average quarterly records. Secondly, the data were also seasonally adjusted (SA), meaning that normal year-to-year cycles have been extracted from the data leaving only trend and noise.]  The data set contains 100 quarterly observations from the first quarter of 1992 through the fourth quarter of 2016. The time series are provided in wide format, storing the date and time index in the first two columns and the remaining 58 columns contain the county-level employment time series. 
+
+
+```{r}
+#Load QCEW data
+  load("data/qcew_cali_sa.Rda")
+```
+
+
+
+The hierarchical clustering process starts with constructing a distance matrix that relates all points to one another. Time series can be associated with one another in terms of Pearson correlation, or how often a pair of time series move together. Using the `cor` function, we transform the 58  time series in the `cali` data frame into a $58 \times 58$ matrix of Pearson correlations. The result is assigned to the matrix `rho`. 
+
+The HAC algorithm requires a distance matrix on which linkage methods can be applied -- the current form of the `rho` matrix does not fit the bill. Each county's set of correlations can be viewed as coordinates that indicate the location of one series relative to another series -- not quite distance. The correlations need to be rationalized as a measure of absolute distance, which can be accomplished by passing the `rho` matrix  to the `dist` function to construct the distance matrix. 
+
+
+```{r, error=FALSE, message=FALSE, warning=FALSE}
+#Calculate correlation matrix
+  rho <- cor(cali[, -c(1:2)])
+
+#Convert into distance matrix (default is Euclidean)
+  d <- dist(rho)  
+```
+
+
+The HAC procedure is neatly packaged into the `hclust` function and can accommodate a number of linkage methods. At a minimum, two arguments need to be specified:
+
+> - *d* is a distance matrix (or dissimilarity matrix) from the `dist` function
+> - *method* is the type of linkage method that guides agglomeration, such as "single", "complete", "average", "centroid", "ward.D", among others. In this example, we apply the *ward.D* method.
+
+The resulting tree is stored in the object `hc`.
+
+
+```{r}
+"#Create HAC tree"
+  hc <- hclust(d, method = "ward.D") 
+```
+
+With the tree grown, we can render a dendrogram. The HCA object can be directly plotted using `plot(hc)`, but given the large number of singletons, consider stylizing the dendrogram for ease of interpretation.  Using the `dendextend` package, the `hc` object is converted into a special dendrogram object to which styles can be applied: the tree is cut into $k = 8$ branches that are color-coded. The font size ("label_cex") is also adjusted for aesthetics. The resulting `dend` object is shown in Figure \@ref(fig:hcplot1).
+
+
+
+```{r, hcplot1, warning=FALSE, message = FALSE, fig.cap = "Dendrogram of county employment patterns in California.", fig.height = 4}
+#Load package
+  pacman::p_load(dendextend)
+
+#Set as dendrogram for plotting, find 8 clusters, label and color code each cluster, 
+#then resize the singleton labels
+  dend <- as.dendrogram(hc) %>% 
+            color_branches(k = 8, groupLabels = TRUE) %>% 
+            color_labels  %>% 
+            set("labels_cex", 0.5) 
+
+#Plot dendrogram
+  plot(dend, font.cex = 1) 
+
+```
+
+
+__Extract and inspect clusters__.  How does one interpret the dendrogram in practice? The vertical axis indicates how dissimilar two records are. A pair of singletons that are linked together near the bottom of the plot are considered to be most similar, whereas clusters linked towards the top are farther apart. To retrieve $k$-number of clusters, we scan along the dissimilarity axis to identify a value at which only $k$ links cross. For example,  $k=4$ is associated with a dissimilarity score of approximately 10, and $k=8$ is approximately 5. Similar to $k$-means the optimal value of $k$ can be found through the Elbow method or maximizing the mean silhouette width. 
+
+For simplicity, let's examine the case of $k=8$ and compare employment patterns within cluster. We retrieve a vector of cluster assignments by applying the `cutree` function setting $k=8$. So that the cluster analysis can be easily tuned to other values of $k$ without substantial editing, we soft-code the desired number clusters to the object `num_k`. We then write the code so that the assumption will propagate to all subsequent steps when the value of $k$ is changed.
+
+
+
+```{r}
+#Number of clusters
+  num_k <- 8
+
+#Define groups
+  groups <- cutree(dend, num_k)
+```
+
+
+
+*Small multiples* are an effective way to communicate patterns in a large amount of data. The format presents a grid of small thumbnail-sized graphs that provide just enough information for the viewer to make quick comparisons. All plots are packed relatively close together so the eyes do not need to move far to detect patterns. If the HAC algorithm were successful at identifying clusters, all series within a cluster should have visually similar trends. Otherwise, the user could tune the value of $k$ until each cluster is visually homogeneous. Our small multiples graph provide a visual summary of each cluster in the form of a $8 \times 11$ matrix: eight rows of time series line plots -- one row for each of $k=8$ clusters, each containing at most 10 plots with one additional column to label the cluster. 
+
+*Setting a color palette*. In theory, each cluster should be distinct from all other clusters. Choosing a visually appealing color palette can emphasize distinctions and make it easier for the viewer to interpret results. Using the `brewer.pal` function in the `RColorBrewer` package, we customize a color palette ("Set2") with $n$ color steps. The color palette is stored in the object `pal`, which is a string vector of $n=8$ hex-codes.
+
+
+
+```{r, message=FALSE, warning=FALSE}
+#Set color palette
+  pacman::p_load(RColorBrewer)
+  pal <- brewer.pal(n = num_k, name = "Set2")
+```
+
+
+*Laying out the small multiples*. While `ggplot2` is the typical visualization analyst's preferred tool, we instead use base R graphics for the small multiples. Before rendering the plots, we define the layout of the plot using `par`: set the `mfrow` argument to contain 8 rows (`num_k`) and 11 columns (one for the cluster label and 10 for graphs). For all graphs to neatly fit, plot margins are adjusted such that only the top margin is given one-inch of space.
+
+With the canvas set, the time series graphs can fill each cell in the $8 \times 11$ grid. When dealing with multiple plots on the same canvas, graphs are inserted into the grid from left to right, then top to bottom. The graphs are laid out under five simple guidelines:
+
+- Each row is a cluster.
+- The first cell is a blank plot in which the cluster label and sample size are placed.
+- The next ten cells in the row (second through eleventh cells) should contain plots or blank plots. 
+- The first ten counties are selected to represent a cluster, each of which is rendered as a minimalist line graph in which axes and axis labels are suppressed. 
+- If a county has less than ten counties, the remainder of the row is filled with blank plots.
+
+This process is repeated for all eight clusters and is efficiently plotted through a set of two loops and an if-else statement.
+
+
+```{r, clustercompare, fig.cap = "Comparison of time series by employment cluster in California.", message=FALSE, warning=FALSE, fig.height = 4}
+
+#(1) Set plot grid  
+  par(mfrow = c(num_k, 11), mar = c(0,0,1,0))
+
+#Loop through all groups
+  for(i in 1:num_k){
+    
+    #Get columns where elements in `groups` matches i
+    #Add +2 to retrieve column index in `cali` data frame 
+      series <- which(groups == i) + 2
+
+    #Create blank plot, then fill with the cluster label
+    #and cluster sample size
+      plot.new()
+      text(0.5, 0.55, i, cex = 1.5, col = pal[i])
+      text(0.5, 0.05, paste0("(n = ", length(series), ")"),
+           col = pal[i])
+    
+    #Loop through the first 10 counties in each cluster
+      for(j in series[1:10]){
+        
+        #Some clusters have less than 10 counties
+        #if j is NA (< 10 counties), fill with a blank plot
+        #if j has an ID, plot the time series
+          if(is.na(j)){
+            plot.new()
+          } else{
+            plot(cali[,j], 
+                 col = pal[i], main = colnames(cali)[j], 
+                 type = "l", axes = FALSE, 
+                 font.main = 1, cex.main = 0.8)
+          }
+      }
+  }
+ 
+```
+
+
+
+*What do these plots tell us?* These clusters illustrate economic motifs. Each cluster has a sort of economic rhythm that distinguishes its growth trajectory likely due to the industries that operate within.  Scanning across each row and between rows, it is apparent that each clusters are different from one another. Some appear to continuously grow while some fluctuate. Cluster 6 experienced booms and busts, possibly due to the influence of the booms and busts of technology companies concentrated in San Francisco and Santa Clara.  Cluster 8 is comprised of Sierra County that has experienced a long steady decline in employment, likely driven by population loss. In stark contrast is Cluster 7's steady upward growth throughout the data set regardless of contractionary periods. In between are clusters 2 and 3 that have experienced volatility in employment, most of which have somewhat rebounded in recent years.  
+
+*Making use of clusters*. From a policy perspective, these clusters can serve as a baseline to inform  interventions tailored to each cluster's profile. A declining cluster (Cluster 68) should not receive the same policy treatments as a well-resourced cluster (Cluster 6) or a continuously growing cluster (7). At the same time, we do not need to craft 58 distinct policy interventions. With clustering, we can move beyond a one-size-fits-all and be more responsive to constituents needs. 
+
+From a research perspective, these clusters can improve the quality of models.  Economists and financial researchers often estimate econometric models using panel time series data. A common strategy employs a fixed effects regression that allows each panel (e.g. county, state) to have its own intercept but assumes that all panels have the same relationship with input variables. For example, imagine if employment in Sierra County was assumed to have the same relationship with inputs as San Francisco County despite differences in growth trajectories. The model may in turn provide misleading coefficient estimates, but also biased predictions. HAC can help identify statistically defensible ways of splitting a panel into smaller groups that exhibit similar behavior and improve the quality of research.
+
+

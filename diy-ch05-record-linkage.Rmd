@@ -1,0 +1,243 @@
+---
+title: 'DIY: Matching people in the UK-UN sanction lists'
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 5*
+
+## Overview
+
+Creating and maintaining lists of high-risk individuals and organizations is part of any national security apparatus.  In fact, a number of nations and governing bodies publish such lists of enemies of the state and their aliases so that companies and people conducting global commerce can follow international sanctions. For example, a number of countries and international organizations maintain sanctions lists:
+
+- [*US Consolidated Screening List*](http://2016.export.gov/ecr/eg_main_023148.asp)
+- [*UK Financial sanctions targets*](https://www.gov.uk/government/publications/financial-sanctions-consolidated-list-of-targets/consolidated-list-of-targets)
+- [*UN Sanctions List*]( https://scsanctions.un.org/resources/xml/en/consolidated.xml)
+- [*EU Sanctions List*](http://ec.europa.eu/external_relations/cfsp/sanctions/list/version4/global/global.xml) 
+
+These data sets pertain to the serious business of global security, but also present an opportunity for record linkage using real-world data. Every day, companies sift through customer lists and marketing lists to understand their customers. Nonprofit development managers compare the lists of donors to marketing lists to find potential donors who resemble their current support base. And organizations operating in the interest of global security compare names of intended recipients of shipments against sanction lists. 
+
+##Examining the data
+
+For simplicity, we will focus only on the UN and EU lists to learn the extent to which they have common identified risks. We begin by loading a `Rda` file containing all watch lists. Note that these lists are constantly updated, thus the files extracted for this exercise are a snapshot from one point in time.
+
+
+```{r, warning= FALSE, message=FALSE}
+load("data/watch_lists.Rda")
+```
+
+
+The watch lists capture similar attributes, but often are organized quite differently. Let's examine the case of Saddam Hussein, the former President of Iraq (Table \@ref(tab:saddam)). Both the EU and UN lists contain his first name and last name, birth date, and citizenship. There are slight deviations in how the names are recorded, but we can see how the lists could be matched after basic string manipulation. 
+
+
+
+```{r, saddam, echo = FALSE, message = FALSE, warning = FALSE}
+# produce a data frame for comparing data sets
+example <- data.frame( eu.variables = c(colnames(eu), rep("",6)), 
+                       eu.example = c(t(eu[eu$id==13,]), rep("",6)),
+                       un.variables = colnames(un), 
+                       un.example = c(t(un[un$id==6908048,])))
+
+#Loop through and limit number of characters
+for(i in 1:4){
+  example[,i] <- substr(example[,i], 1,23)
+  example[,i][is.na(example[,i])] <- ""
+}
+row.names(example) <- NULL
+knitr::kable(example, caption = "Comparison of EU and UN lists.", booktab = TRUE,
+             col.names = c("EU Variables", "", "UN Variables", "Example"))
+
+```
+
+  
+
+Based on visual inspection, the following five fields contain similar information useful for matching: `firstname`, `middlename`/`secondname`, `lastname`/`thirdname`, `wholename`, and `birthdate`. Using the procedures laid out in this chapter, we can easily compare the performance of deterministic record linkage versus probabilistic record linkage.  
+
+##Data preparation
+
+Different organizations treat names differently. Some may concatenate parts of first and middle names while others keep them separate.  To minimize the influence of recording error, all parts of a name from the UN data set are concatenated into a `wholename` field, similar to the EU data, and filling any `NA` value with empty quotes. This will prevent `NA` values from being treated as "NA" strings. To establish a baseline for matching performance, we check for possible matches without any additional text standardization.
+
+  
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Fill empty quotes
+  eu[is.na(eu)] <- ""
+  un[is.na(un)] <- ""
+
+#Create wholename
+  un$wholename <- paste(un$firstname, un$secondname, un$thirdname)
+  
+#Number of overlapping records
+  print(sum(un$wholename %in% eu$wholename))
+```
+ 
+
+Sadly, only $n = $`r sum(un$wholename %in% eu$wholename)`  records from thousands match. With only a modest level of effort, we develop a function called `textStandard` to correct for typographical differences. Text characters can be standardized by stripping spaces that come before and after strings known as white space (`str_trim`), removing unnecessary punctuation and spaces (`str_remove_all` with a regex pattern `[[:punct:][:space:]]`), then converting strings to lower case (`str_to_lower`). As the procedure will be applied and re-applied, it is a good idea to write a re-usable function that strings together these three `stringr` package functions:
+
+
+```{r}
+  textStandard <- function(string_val){
+    #
+    # Basic text standardization 
+    # Args: 
+    #   string_val = a string or string vector
+    # Returns:
+    #   Transformed, trimmed, lower case strings 
+    #
+    
+    require(stringr)
+    
+    output <- string_val %>% 
+                str_remove_all("[[:punct:][:space:]]") %>% 
+                str_to_lower() %>%
+                str_trim()
+  }
+
+```
+
+A second attempt at matching returns much improved results, reaching $n=668$ matches.
+
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Clean
+  un$clean.wholename <- textStandard(un$wholename)
+  eu$clean.wholename <- textStandard(eu$wholename)
+
+#Overlap
+  print(sum(un$clean.wholename %in% eu$clean.wholename))
+```
+ 
+
+Next, the `birthdate` values also need to be standardized. Some UN records contain YYYY-MM-DD while others oddly capture minute-level detail (likely a recording error). The EU records are a mix of year and YYYY-MM-DD along with commentary on the data quality. Using `stringr` functions, we remove text from the `birthdate` fields as well as construct a four-digit `birthyear` field.
+
+ 
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Clean UN to YYYY-MM-DD records
+  un$birthdate <- str_extract(un$birthdate, "\\d{4}-\\d{2}-\\d{2}")
+
+#Remove text from YYYY
+  eu$birthdate <- str_replace(eu$birthdate, " \\(approximative\\)", "")
+
+#Extract birth year using regex and stringr
+  un$birthyear <- str_extract(un$birthdate, "\\d{4}")
+  eu$birthyear <- str_extract(eu$birthdate, "\\d{4}")
+```
+
+ 
+
+## Deterministic record linkage
+
+Our deterministic linkage strategy starts with the most precise information, then relaxes matching requirements in each of two subsequent matching waves: 
+
+- first: `clean.wholename` and `birthdate`;
+- second: `clean.wholename` and `birthyear`; then
+- third: `clean.wholename` only.
+
+In each wave, we make note of which wave a match was made, giving credit to more precise matches. 
+
+  
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Load for inner join function
+  pacman::p_load(dplyr)
+
+#Abridged tables
+  eu_short <- eu[, c("eu.id", "wholename", "clean.wholename", "birthdate", "birthyear")]
+  un_short <- un[, c("un.id", "wholename", "clean.wholename", "birthdate", "birthyear")]
+
+#Match waves
+  wave_1 <- inner_join(eu_short, un_short, by = c("clean.wholename", "birthdate"))
+  wave_2 <- inner_join(eu_short, un_short, by = c("clean.wholename", "birthyear"))
+  wave_3 <- inner_join(eu_short, un_short, by = c("clean.wholename"))
+  
+#Combine into master table and de-duplicate
+  det_key <- rbind(cbind(wave_1[, c("eu.id", "un.id", "clean.wholename")], match = 1),
+                     cbind(wave_2[, c("eu.id", "un.id", "clean.wholename")], match = 2),
+                     cbind(wave_3[, c("eu.id", "un.id", "clean.wholename")], match = 3))
+  det_key <- det_key[!duplicated(det_key[,1:3]), ]
+
+```
+
+
+
+From three waves of matching, a total of $n = 676$ matches (```nrow(det_key)```) were identified. This is only a fraction of the UN list ($n = 1046$ -- ```nrow(un_short)```) and the EU list ($n = 2016$ -- ```nrow(eu_short)```). While the most precise matches accounted for only $n=146$ (```nrow(wave_1)```),  the bulk of matches were identified in the second wave. The third wave using `wholename` alone offers few gains over the first two waves. 
+
+##Probabilistic record linkage
+
+There will undoubtedly be missed matching opportunities due to variation in spelling. Probabilistic record linkage can close the gap using the same three fields, but cast a wider net by allowing a partial fuzzy match on the `clean.wholename` field.
+
+
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Load for fastLink
+  pacman::p_load(fastLink)
+
+#Run example
+  prob_link <- fastLink(eu_short, un_short,
+                  varnames = c("clean.wholename", "birthdate", "birthyear"),
+                  stringdist.match = c("clean.wholename"),
+                  partial.match = c("clean.wholename"))
+```
+
+
+
+A comparison of classification thresholds indicates that there is little difference in the match rate from  $.75 \leq \xi \leq 0.9$  -- model's estimates are robust. The match rate is significantly greater than the deterministic approach.
+
+
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Optimal cutoff
+  summary(prob_link, threshold = seq(0.75, 0.95, 0.05))
+```
+
+
+We use `getMatches` to recover the dataframe of matches, containing attributes from the `eu` data along with a row index for the corresponding match from the `un` data. In total, the model identified $n=915$ matches -- most of which are $1:1$ matches and a smaller number ($n=22$) are $1:m$ matches. Virtually all deterministic matches are also present in the probabilistic match results, thus the latter can do the job of the former and much more. There are clearly more matches generated through probabilistic matching, but some may wonder if a model-based approach actually surpasses human intuition: *Are the matches accurate?* 
+
+By drawing a random subset of non-exact matches, there is clear evidence that the matching model is robust to spelling differences, excess and missing information, and order of names. The proof is in the pudding.  Probabilistic record linkage is arguably a superior strategy to deterministic record linkage, but in practice, it does not hurt to try both.
+
+
+
+```{r, message=FALSE, warning=FALSE, results = "hide"}
+#Recover matches
+  prob_match <- getMatches(dfA = eu_short, dfB = un_short, 
+                         fl.out = prob_link, threshold.match = 0.85)
+
+#Recover UN IDs, whole name and birth year for visual inspection
+  prob_match$un.id <- un_short$un.id[prob_match$`dfB.match[, names.dfB]`]
+  prob_match$un.wholename <- un_short$wholename[prob_match$`dfB.match[, names.dfB]`]
+  prob_match$un.birthyear <- un_short$birthyear[prob_match$`dfB.match[, names.dfB]`]
+```
+
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+#Extract nice looking results
+  outie <- prob_match[, c("un.wholename", "un.birthyear",  
+                          "wholename", "birthyear")]
+
+#Format
+  outie$un.wholename <- str_to_title(outie$un.wholename)
+  outie$wholename <- str_to_title(outie$wholename)
+  
+#Find cases where information was different
+  flag1 <- stringdist(outie$wholename, outie$un.wholename, method = "jw")
+  outie <- outie[flag1 > 0.05 & flag1 < 0.4, ]
+  outie <- outie[nchar(outie$un.wholename) < 25,]
+  
+#Print out
+  set.seed(100)
+  knitr::kable(outie[sample(1:nrow(outie),9),], 
+               caption = "Sample results from probabilistic record linkage.", booktab = TRUE,
+               row.names = FALSE,
+               col.names = c("Name (UN)", "Year (UN)",
+                             "Name (EU)", "Year (EU)"))
+
+```
+
+
+##References
+
+

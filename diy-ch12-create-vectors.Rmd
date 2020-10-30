@@ -1,0 +1,63 @@
+---
+title: 'DIY: Converting coordinates into point vectors'
+bibliography: references.bib
+output:
+  html_document:
+    fig_caption: yes
+    highlight: tango
+    theme: spacelab
+---
+
+*From Chapter 12*
+ 
+
+In this DIY, we put into practice steps for working with point vectors, importing two CSVs of point data and preparing them as spatial vectors. Both data sets are drawn from the domain of public safety in the US city of Chicago: 
+
+> `data/chicago-police-stations.csv`
+
+- Locations of $n=23$ police stations
+- Includes district, latitude, longitude, and several other variables
+
+> `data/chicago-crime-2018.csv`
+
+- Reported crime incidents ($n = 267687$) by the Chicago Police Department in 2018
+- Includes date, latitude and longitude (at block level), type/description of crime, whether an arrest was made, and many other variables
+
+Below, we begin with importing the two `CSV` files, then clean the headers with the `clean_names` function (`janitor` package).
+
+
+```{r, loadchicagopointdata, message = F, cache = T}
+#Load packages
+  pacman::p_load(dplyr, janitor, sf, magrittr)
+
+#Load the datasets and clean names
+  station_df <- read_csv("data/chicago-police-stations.csv") %>% clean_names()
+  crime_df <- read_csv("data/chicago-crime-2018.csv") %>% clean_names()
+```
+
+While converting a points data frame into a vector file is as easy as using the `st_as_sf` function (from `sf`), we need to pay attention to the data quality of the geographic coordinates. In real world data, the location of every event or incident is not likely to be known, sometimes limiting a data scientist's ability to see the whole picture. Furthermore, missing coordinates can prevent `R` from processing data frames into vectors. Before converting into spatial data, be sure to remove records that are missing coordinates. While `station_df` has complete information, `crime_df` is missing $n =4254$ or 1.5% of reported crime incidents. In the code snippet below, we directly convert `station_df` into a spatial file and add a missing values filtering step before converting `crime_df`.
+
+
+
+```{r,message =FALSE, warning=FALSE}
+#Convert into station_df to sf
+  station_sf <- station_df  %>% 
+                  st_as_sf(coords = c("longitude", "latitude"))
+  
+#Remove NAs from crime_df and convert to sf
+  crime_sf <- crime_df %>% 
+                  filter(!is.na(longitude) & !is.na(latitude)) %>% 
+                  st_as_sf(coords = c("longitude", "latitude"))
+```
+
+With the data in spatial form, we need to set the CRS, then transform it into a useful form. First, we set the standard EPSG 4326 (WGS84) as the CRS, then re-project the files into a computationally useful CRS. In this case, we choose UTM zone 16N, which is EPSG 32616. This CRS flattens the Earth's surface and reports coordinates in meters, making it possible to calculate accurate distance between locations as long as data are confined to the Zone 16N. We will revisit these more advanced processing steps later in this chapter.
+
+```{r,message = FALSE, warning=FALSE}
+#Set CRS
+  station_sf <- st_set_crs(x = station_sf, value = 4326)
+  crime_sf <- st_set_crs(x = crime_sf, value = 4326)
+  
+#Transform
+  station_sf <- st_transform(station_sf, 32616)
+  crime_sf <- st_transform(crime_sf, 32616)
+```
