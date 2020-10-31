@@ -1,5 +1,5 @@
 ---
-title: 'DIY: Tokenizing text'
+title: 'DIY: Basic text processing'
 bibliography: references.bib
 output:
   html_document:
@@ -11,15 +11,20 @@ output:
 *From Chapter 13*
  
 
-Our ultimate objective over this sequence of DIYs is to estimate the similarity between two or more documents. In the first DIY, we process a set of five news articles into tokens using a combination of the `tidytext` package to work with text, `dplyr` for general data manipulation, and `stringr` for manipulating string values.
+> *DIYs are designed to be hands-on. To follow along, download the DIYs repository from Github ([https://github.com/DataScienceForPublicPolicy/diys](https://github.com/DataScienceForPublicPolicy/diys)). The R Markdown file for this example is labeled `diy-ch13-text.Rmd`.*
+
+
+Textual processing, TF-IDF and document similarities are foundational knowledge for natural language applications. In this DIY, we illustrate how to put these concepts to use.  Using a set of news articles, we illustrate the process of constructing a DTM, then use TF-IDF to find potential stop words. Lastly, we relate two or more documents to one another using cosine similarity. For a large scale database, these steps can help identify relationships between documents and easily facilitate qualitative analyses.
+
+The news articles used for this DIY focus on the US' federal budget deficit as reported on in October 2019 [@nytimesdeficit, @deficit, @marketwatchdeficit, @thehilldeficit, @cnbcdeficit] and were scraped from various news websites.^[In the wild, these news articles would have been embedded in HTML files on websites, requiring some attention to the structure of the page.]
+
+To start, we load a combination of packages, namely the `tidytext` package to work with text, `dplyr` for general data manipulation, and `stringr` for manipulating string values.
 
 ```{r, textpackages, message = FALSE, error = FALSE, warning = FALSE}
   pacman::p_load(tidytext, dplyr, stringr)
 ```
 
-The news articles, all of which were published in October 2019, focus on the US' federal budget deficit [@nytimesdeficit, @deficit, @marketwatchdeficit, @thehilldeficit, @cnbcdeficit] and were scraped from various news websites.^[In the wild, these news articles would have been embedded in HTML files on websites, requiring some attention to the structure of the page.] To start, we load the CSV that contains the articles into a data frame named `deficit`. 
-
-The text is then scrubbed of all numeric values and punctuation using a simple regex search. While we recognize that numbers embedded in the text carry useful information, we are more concerned with standardizing words so their frequency can approximate importance. 
+__*Processing*__. The five articles are stored in a CSV named `deficit-articles.csv`. As a initial step, the text should be scrubbed of all numeric values and punctuation using simple regex statements. While we recognize that numbers can carry useful information, we are more concerned with standardizing words so their frequency can approximate importance. 
 
 ```{r, loadtext, message = FALSE, error = FALSE, warning = FALSE}
 #Load file
@@ -31,7 +36,8 @@ The text is then scrubbed of all numeric values and punctuation using a simple r
   
 ```
 
-Now, the magic of data processing begins. In one neat block of code, we unravel the text into neat word counts for each article, piping multiple commands together (`%>%`). 
+In one neat block of code, we unravel the text into neat word counts for each article, piping multiple commands together (`%>%`). 
+
 *Tokenization*. The code first tokenizes the `text` column into unigrams (single word tokens) using the `unnest_tokens` function (`tidytext`). A new column `word` is added to the data frame, expanding the number of rows from $n=5$ to $n=2989$.  Note that each token is automatically converted to lower case.
 
 *Stop words*. With the tokens exposed, stop words are removed. We retrieve a data frame of standard English stop words using the `get_stopwords`, then apply an `anti_join` (`dplyr` package) that retains rows that did not match terms in the stop word list. This step significantly reduces the size of the data set to $n=1792$.
@@ -68,22 +74,11 @@ Now, the magic of data processing begins. In one neat block of code, we unravel 
 
 ```
 
-### DIY: Distinguishing between documents
 
-While term frequencies carry significant inferential power, they are also a specific representations of word importance -- higher frequency terms carry more importance.   In our example, all five articles focus on the 2019 federal budget deficit and the words "trillion", "dollar", "budget", and "deficit" all have high TF values. These high frequency terms prove particularly useful to distinguish between articles about deficits and all other topics such as education and defense. But in the case of a narrowly defined corpus exclusively focused on deficits, these terms can be viewed as stop words. Furthermore, some words may be more important (or prevalent) in one article than another, serving as a marker of a subtopic.
 
-To draw distinctions between documents, we adjust a term's frequency in a document by how prevalent it is in all other documents. For example, since "deficit" appears in all deficit articles, then it might not be as important as it is not specific to any single articles.  An *Inverse Document Frequency* (IDF) is a factor that modulates the role of Term Frequencies: 
+__*Distinguishing between documents*__. Term frequencies imply that higher frequency terms carry more importance.   In our example, all five articles focus on the 2019 federal budget deficit and the words "trillion", "dollar", "budget", and "deficit" all have high TF values. These high frequency terms prove particularly useful to distinguish between articles about deficits and any other non-deficit topic such as education and defense. In the case of a narrowly defined corpus exclusively focused on deficits, these terms can be viewed as stop words. TF-IDF can be applied to identify overly common words.
 
-$$IDF = ln(\frac{N}{n_{term}})$$
-
-where $N$ is the number of documents and $n_{term}$ is the number of documents that contain a given term. When a term appears in all documents, the value of $IDF = 0$ -- thereby eliminating a term. But we can also see that if the ratio $\frac{N}{n_{term}}$ is too large, the IDF value could overpower the term frequency, thus taking the natural log $ln$ keeps the influence of IDF in check. 
-
-When we combine TF and IDF, the result is *TF-IDF* -- one of the most commonly applied word weighting measures in NLP: 
-
-$$\text{TF-IDF} = TF \times IDF$$
-When the value of $\text{TF-IDF}=0$, then a term is effectively treated as a stop word. This weighting scheme has been proven to be particularly useful in *document search* applications, providing a normalized perspective of which variables matter more. 
-
-To use TF-IDF in `R`, we apply the `bind_tf_idf` function to our word counts, which calculates and joins the TF, IDF, and combined TF-IDF metrics for each token.
+ To use TF-IDF in `R`, we apply the `bind_tf_idf` function to our word counts, which calculates and joins the TF, IDF, and combined TF-IDF metrics for each token.
 
 ```{r, message = FALSE, error = FALSE, warning = FALSE}
   unigram <- unigram  %>%
@@ -128,25 +123,7 @@ unigram <- rbind(unigram[up_down == "down",],
     
 ```
 
-### DIY: Finding similar documents
-
-Organizations often need to quickly find *similar documents* from a large catalog of documents. The process can at times be tedious and arduous, requiring much manual work. Lawyers, for example, often search for pertinent legal records to make their arguments more compelling. Meanwhile, academic researchers often conduct extensive literature reviews so they can articulate how their work contributes to their field of study. In both cases, they start with a set of documents and look for other documents that are also similar, often times using simplistic keyword searches to sort documents.
-
-What if a corpus of documents were transformed into a DTM? A simple keyword search is transformed into a multi-keyword search.   Then, all that is required is a strategy to relate a pair of equal-length term vectors, $X$ and $Y$, derived from a pair of documents. A Pearson's Correlation Coefficient is a logical first choice to facilitate the comparison:
-
-$$\rho_{X,Y} = \frac{cov(X,Y)}{\sigma_X \sigma_Y}= \frac{\sum_{i=1}^n (X_i-\mu_X)(Y_i-\mu_Y)}{\sum_{i=1}^n (X_i-\mu_X)^2\sum_{i=1}^n (Y_i-\mu_Y)^2}$$
-
-Although a simple correlation *would* be convenient, the way in which texts are related is differently motivated than other empirical tasks. For two texts to be similar, they should have words in common. But most DTMs tend to be sparse. While a document may have $n$ words, it is smaller than the corpus' vocabulary $V$. This implies that most term frequencies in a DTM are equal to zero, which in turn means that it is fairly rare that a term will appear in a pair of documents. Conversely, it is more common that terms in a pair of documents will both be zero -- these are terms are not relevant to the calculation of similarity. 
-
-*Why does this matter?* In a simple correlation, values of zero are treated as relevant information as every value is mean-centered ($\mu$). In practice, *a Pearson's correlation may artificially inflate the relationship between two vectors by treating zero values as relevant information*. To hone-in on the relevant overlapping terms, we can instead rely on *cosine similarity*, which associates two vectors without mean-centering its values:
-
-$$cos(\theta) = \frac{\text{X} \cdot \text{Y}}{\|\text{X}\|\|\text{Y}\|}= \frac{\sum_{i=1}^n X_i Y_i}{\sqrt{\sum_{i=1}^n X_i^2}\sqrt{\sum_{i=1}^n Y_i^2}}$$
-
-Cosine similarity originates from an idea in vector calculus that uses the direction of two vectors to measure their similarity. If vector $X$ is parallel to vector $Y$, then they are similar. Otherwise, if $X$ is orthogonal to $Y$, then they are dissimilar.  Thus, the measure is the cosine of the angle between two vectors, but not the strength of the relationship. When applied to text data, the $cos(\theta)$ ranges between 0 (not similarity) and 1 (perfectly similar). 
-
-In the code snippet, we construct DTMs using each TF-IDF and term frequencies, then calculate cosine similarity matrices using the `cosine` function (`coop` package). As is apparent in Figure \@ref(tab:cosinesim), our choice of input metric accentuates different qualities of the articles.  The raw term frequencies help identify articles that are related in their overarching topics, fixating on common words that describe the federal deficit. However, TF-IDF treats these common words as stop words, leaving only terms that are reflective of the author's style and attitudes rather than the big picture. Both are valid approaches, however. The deciding factor should be what aspect of the text the similarity should reflect.
-
-Cosine similarity is the relational metric used for a multitude of recommendation systems. By calculating the cosine similarity between all documents in a corpus, it is easy to recommend other articles with similar content. For example, the scores in Figure \@ref(tab:cosinesim) can be interpreted as a list of *similar articles conditional on the MarketWatch article*. 
+__*Finding similar documents*__. In order to associate the articles with one another, we can construct cosine similarities from the DTM. There is, however, an outstanding consideration: should the similarities be based on term frequencies or TF-IDF.  Using the `cosine` function (`coop` package), we calculate the cosine similarities for each case. 
 
 
 ```{r, eval = FALSE}
@@ -163,6 +140,12 @@ Cosine similarity is the relational metric used for a multitude of recommendatio
                  cast_dtm(word.stem, outlet, tf_idf)
   cosine(grams_tfidf)
 ```
+
+
+As is apparent in Figure \@ref(tab:cosinesim), our choice of input metric emphasizes different qualities of the articles.  The raw term frequencies help identify articles that are related in overarching topics, fixating on common words that describe the federal deficit. However, TF-IDF treats these common words as stop words, leaving only terms that are reflective of the author's style and attitudes rather than the big picture. Both are valid approaches. The most appropriate metric, however, is dependent on the analytical objective.
+
+Cosine similarity is simply the relational metric that helps rank documents with respect to each document. By calculating the cosine similarity between all documents in a corpus, one can recommend other articles with similar content. For example, the scores in Figure \@ref(tab:cosinesim) can be interpreted as a list of *similar articles conditional on the MarketWatch article*. 
+
 
 ```{r, message = FALSE, warning = FALSE, error = FALSE, echo = FALSE}
 #Load COOP
